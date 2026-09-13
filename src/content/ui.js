@@ -195,7 +195,16 @@
     this.shadow.addEventListener('keydown', function (e) { e.stopPropagation(); });
 
     this._makeDraggable(bar, this.shadow.querySelector('.grip'));
-    (document.body || document.documentElement).appendChild(this.host);
+
+    var parent = document.body || document.documentElement;
+    parent.appendChild(this.host);
+
+    // Additive clearance for the fixed toolbar. An element rather than a
+    // padding override, so a page that already reserves more space keeps it.
+    this.spacer = document.createElement('fr-spacer');
+    this.spacer.className = 'fr-ignore';
+    this.spacer.setAttribute('aria-hidden', 'true');
+    parent.appendChild(this.spacer);
   };
 
   UI.prototype._makeDraggable = function (bar, grip) {
@@ -370,7 +379,9 @@
   UI.prototype.destroy = function () {
     this.updateRuler(null);
     if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
+    if (this.spacer && this.spacer.parentNode) this.spacer.parentNode.removeChild(this.spacer);
     this.host = null;
+    this.spacer = null;
     this.shadow = null;
   };
 

@@ -27,7 +27,7 @@
     OPTION: 1, BUTTON: 1, CODE: 1, PRE: 1, KBD: 1, SAMP: 1, VAR: 1,
     SVG: 1, MATH: 1, CANVAS: 1, IFRAME: 1, VIDEO: 1, AUDIO: 1, OBJECT: 1,
     EMBED: 1, MAP: 1, AREA: 1, TITLE: 1, HEAD: 1, LINK: 1, META: 1,
-    'FR-S': 1, 'FR-T': 1, 'FR-UI': 1, 'FR-B': 1
+    'FR-S': 1, 'FR-T': 1, 'FR-UI': 1, 'FR-B': 1, 'FR-SPACER': 1
   };
 
   var INLINE_DISPLAY = {

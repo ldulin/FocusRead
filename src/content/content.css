@@ -37,6 +37,27 @@ fr-s {
   transition: background-color .16s ease, opacity .16s ease, box-shadow .16s ease;
 }
 
+/* ---- make room for the toolbar ----
+   The toolbar is fixed to the bottom of the viewport, so without clearance the
+   last lines of a page sit underneath it and cannot be read or clicked.
+   scroll-padding keeps scrollIntoView() from parking a sentence behind it; the
+   space itself comes from a spacer element the UI appends, because forcing
+   padding on <body> would REDUCE it on pages that already reserve more. */
+html.fr-active { scroll-padding-bottom: 104px; }
+
+fr-spacer {
+  display: block !important;
+  width: 100% !important;
+  height: 88px !important;
+  flex: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  pointer-events: none;
+}
+@media print { fr-spacer { display: none !important; } }
+
 /* ---- click-to-read affordance (only while the reader is active) ---- */
 html.fr-active fr-s { cursor: pointer; }
 html.fr-active fr-s:hover:not(.fr-cur) {

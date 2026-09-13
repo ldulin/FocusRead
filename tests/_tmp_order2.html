@@ -1,0 +1,62 @@
+<!doctype html><meta charset="utf-8"><title>engine order fix test</title>
+<div id="root">
+<ul>
+  <li>Install the package.
+    <ul><li>On macOS use brew.</li></ul>
+    Then run the tests.
+  </li>
+</ul>
+<div>
+  Intro text goes here.
+  <blockquote>A quoted line sits here.</blockquote>
+  Continuation text follows.
+</div>
+<p>A plain <em>inline</em> paragraph stays whole.</p>
+</div>
+<pre id="out"></pre>
+<script src="../src/lib/segmenter.js"></script>
+<script src="../src/content/engine.js"></script>
+<script>
+// PATCHED _collectBlocks: start a new entry whenever the owning block changes.
+FR.Engine.prototype._collectBlocks = function (scope) {
+  var self = this;
+  var isSkipped = FR.engineUtils.isSkipped;
+  var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+    acceptNode: function (n) {
+      if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      for (var p = n.parentNode; p && p !== scope.parentNode; p = p.parentNode) {
+        if (isSkipped(p)) return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  var blocks = [], cur = null, node;
+  while ((node = walker.nextNode())) {
+    var block = self._blockOf(node);
+    if (!cur || cur.el !== block) { cur = { el: block, pieces: [], text: '' }; blocks.push(cur); }
+    cur.pieces.push({ node: node, start: cur.text.length, len: node.nodeValue.length });
+    cur.text += node.nodeValue;
+  }
+  return blocks.filter(function (b) {
+    if (b.text.trim().length < self.opts.minBlockChars) return false;
+    try { if (!b.el.getClientRects().length) return false; } catch (e) {}
+    return true;
+  });
+};
+
+var e = new FR.Engine(document.getElementById('root'));
+var lines = e._collectBlocks(document.getElementById('root')).map(function(b,i){
+  return 'block '+i+' <'+b.el.tagName+'> pieces='+b.pieces.length+' text='+JSON.stringify(b.text);
+});
+e.scan().then(function(n){
+  lines.push('--- sentences ('+n+') ---');
+  e.sentences.forEach(function(r){ lines.push(r.i+': marks='+r.marks.length+' '+JSON.stringify(r.text)); });
+  var bad = [];
+  for (var i=1;i<e.sentences.length;i++){
+    var a=e.sentences[i-1].marks[0], b=e.sentences[i].marks[0];
+    if (a&&b && (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING)) bad.push((i-1)+'->'+i);
+  }
+  lines.push('--- backwards transitions: '+(bad.join(', ')||'none'));
+  document.getElementById('out').textContent = lines.join('\n');
+});
+</script>
