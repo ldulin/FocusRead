@@ -62,6 +62,18 @@
       sents('We used mice, rats, etc., and all were healthy.'),
       ['We used mice, rats, etc., and all were healthy.']);
 
+    eq('unit abbreviation ending a sentence',
+      sents('Each run took 6.5 min. Data are available online.'),
+      ['Each run took 6.5 min.', 'Data are available online.']);
+
+    eq('unit abbreviation mid-sentence',
+      sents('Each run took 6.5 min and was repeated twice.'),
+      ['Each run took 6.5 min and was repeated twice.']);
+
+    eq('unit abbreviation followed by lowercase',
+      sents('We washed for 10 min. then imaged the slice.'),
+      ['We washed for 10 min. then imaged the slice.']);
+
     eq('et al. before a year',
       sents('This matches Smith et al. (2020) exactly.'),
       ['This matches Smith et al. (2020) exactly.']);

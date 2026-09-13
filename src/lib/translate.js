@@ -115,6 +115,36 @@
 
   var builtinPool = {};   // "src>tgt" -> Promise<translator>
 
+  /**
+   * Every call into the built-in translator gets a watchdog.
+   *
+   * These promises can hang indefinitely rather than reject - availability()
+   * stalls when Chrome cannot reach its model service, and a pack download that
+   * dies mid-flight simply stops emitting progress with no error event. Without
+   * a timeout the UI sits on "Checking translator..." forever.
+   */
+  function withTimeout(promise, ms, onTimeout) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        onTimeout(resolve, reject);
+      }, ms);
+      Promise.resolve(promise).then(function (v) {
+        if (done) return;
+        done = true; clearTimeout(timer); resolve(v);
+      }, function (e) {
+        if (done) return;
+        done = true; clearTimeout(timer); reject(e);
+      });
+    });
+  }
+
+  var PROBE_TIMEOUT = 4000;      // availability()
+  var CREATE_TIMEOUT = 120000;   // create(), which may download a language pack
+  var TRANSLATE_TIMEOUT = 30000; // a single translate() call
+
   function builtinCtor() {
     if (typeof root.Translator !== 'undefined') return root.Translator;
     if (root.translation && typeof root.translation.createTranslator === 'function') {
@@ -145,8 +175,13 @@
     // availability() reports 'unavailable' for a same-language pair, which is
     // indistinguishable from "not supported" unless we check it ourselves.
     if (source === tgt) return Promise.resolve('same-language');
-    return Promise.resolve()
-      .then(function () { return T.availability({ sourceLanguage: source, targetLanguage: tgt }); })
+    return withTimeout(
+      Promise.resolve().then(function () {
+        return T.availability({ sourceLanguage: source, targetLanguage: tgt });
+      }),
+      PROBE_TIMEOUT,
+      function (resolve) { resolve('unknown'); }
+    )
       .then(function (v) {
         // MDN documents a null return meaning "could not be determined"; a
         // strict switch over the four documented strings would fall through.
@@ -180,7 +215,11 @@
             });
           };
         }
-        return T.create(opts);
+        return withTimeout(T.create(opts), CREATE_TIMEOUT, function (resolve, reject) {
+          reject(Object.assign(
+            new Error('Chrome stopped responding while preparing the language pack. Check your connection and try again, or choose another provider in settings.'),
+            { code: 'builtin-timeout' }));
+        });
       })
       .catch(function (e) {
         delete builtinPool[k];
@@ -211,9 +250,14 @@
         // Translations are sequential per instance; a parallel fan-out would
         // queue behind itself anyway, so be explicit about it.
         return serial(texts, function (t) {
-          return Promise.resolve(tr.translate(t)).then(function (out) {
-            return { ok: true, text: String(out) };
-          });
+          return withTimeout(
+            Promise.resolve().then(function () { return tr.translate(t); }),
+            TRANSLATE_TIMEOUT,
+            function (resolve, reject) {
+              reject(Object.assign(new Error('The built-in translator stopped responding.'),
+                                   { code: 'builtin-timeout' }));
+            }
+          ).then(function (out) { return { ok: true, text: String(out) }; });
         });
       });
     });

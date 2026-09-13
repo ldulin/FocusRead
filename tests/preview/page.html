@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Test article - FocusRead</title>
+<link rel="stylesheet" href="../../src/content/content.css?v=1789333867">
+<style>
+  body { max-width: 42rem; margin: 40px auto; padding: 0 22px 40vh;
+         font: 17px/1.7 Georgia, serif; color: #23262b; background: #fbfbfc; }
+  h1 { font-size: 1.7em; line-height: 1.25; }
+  h2 { font-size: 1.15em; margin-top: 2em; }
+  nav { font: 13px sans-serif; color: #888; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+  .katex { font-family: serif; font-style: italic; background: #eef; padding: 0 3px; }
+  pre { background: #f0f0f2; padding: 10px; overflow-x: auto; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<nav>Journal of Test Results &middot; Vol 12 &middot; 2026</nav>
+
+<h1>Sentence segmentation under adversarial punctuation</h1>
+
+<p>Prior work (Smith et al., 2020) reported an effect at <em>p</em> &lt; 0.05 across
+three cohorts. We replicated this in a pre-registered sample. See Fig. 3 for the
+full distribution, and cf. Jones for a contrasting account.</p>
+
+<p>Participants (N = 24, mean age 22.4 yrs) completed 3 runs of the task. Each run
+took 6.5 min. Data are available at
+<a href="https://doi.org/10.1038/nn.4499">https://doi.org/10.1038/nn.4499</a> for
+reuse. The dataset is open access.</p>
+
+<h2>1. Methods</h2>
+
+<p>We used a Butterworth filter, i.e. a maximally flat response, before resampling
+to 1 kHz. The pipeline was implemented by J. R. Smith and validated against the
+U.S. National Institute of Standards reference set. Stimuli included images,
+sounds, etc. Results were consistent across modalities.</p>
+
+<p>Although the effect was <strong>small</strong> in the first cohort, we observed a
+consistent increase across all three replication samples, which suggests that the
+underlying mechanism is robust to variation in both the stimulus set and the
+participant population.</p>
+
+<p>The formula <span class="katex">E = mc^2</span> should be skipped entirely by the
+reader, as should the code block below.</p>
+
+<pre>def segment(text):
+    return text.split(".")  # do not read me aloud</pre>
+
+<ul>
+  <li>First item. It has two sentences.</li>
+  <li>Second item, which runs on a little longer and ends here.</li>
+</ul>
+
+<script src="stub.js?v=1789335491"></script>
+<script src="../../src/lib/segmenter.js?v=1789335851"></script>
+<script src="../../src/lib/settings.js?v=1789334493"></script>
+<script src="../../src/lib/translate.js?v=1789335625"></script>
+<script src="../../src/content/speech.js?v=1789334295"></script>
+<script src="../../src/content/engine.js?v=1789334110"></script>
+<script src="../../src/content/ui.js?v=1789333970"></script>
+<script src="../../src/content/controller.js?v=1789335436"></script>
+<script>
+  // Stand in for the content-script entry point so the page can be driven
+  // from the console during development.
+  window.frController = new FR.Controller({ root: document.body });
+  window.frReady = FR.settings.set({ focusMode: 'spotlight' })
+    .then(function () { return window.frController.activate(); });
+</script>
+</body>
+</html>

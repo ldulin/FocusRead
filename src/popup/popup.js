@@ -68,7 +68,8 @@
         text.textContent = 'Source and target are the same language.';
       } else if (st === 'unknown') {
         dot.className = 'dot warn';
-        text.textContent = 'Chrome could not report translator status. Try anyway, or pick another provider.';
+        text.textContent = 'Chrome did not answer about translation support - usually no connection. ' +
+                           'You can still try, or pick another provider in Settings.';
         dl.hidden = false;
       } else {
         dot.className = 'dot bad';

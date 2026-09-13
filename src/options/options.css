@@ -9,6 +9,13 @@
   }
 }
 * { box-sizing: border-box; }
+
+/* An author `display` beats the user-agent's [hidden] rule, so every element
+   this page hides with .hidden = true would otherwise stay visible. In the
+   reader that means the drop zone, the spinner and the document all showing at
+   once; here it means conditional settings never hide. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0 auto; padding: 26px 22px 60px; max-width: 780px;
   background: var(--bg); color: var(--ink);
@@ -83,4 +90,18 @@ kbd {
   margin: 12px 0; padding: 11px 14px; border-radius: 10px; font-size: 13px; line-height: 1.55;
   background: color-mix(in srgb, #f5c518 15%, var(--card));
   border: 1px solid color-mix(in srgb, #f5c518 42%, transparent);
+}
+
+/* Narrow windows: stack each row instead of squeezing the label to one word
+   per line. The settings page normally opens in a full tab, but it should not
+   fall apart in a split or a small window. */
+@media (max-width: 620px) {
+  body { padding: 18px 14px 48px; }
+  .field { flex-direction: column; align-items: stretch; gap: 8px; }
+  .field .control { justify-content: flex-start; }
+  input[type=text], input[type=password], select, textarea { width: 100%; max-width: none; }
+  input[type=range] { width: 100%; }
+  .field .control > div { width: 100%; }
+  nav { gap: 2px; }
+  nav button { padding: 6px 10px; }
 }

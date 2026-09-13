@@ -41,9 +41,6 @@
     // titles
     'Dr', 'Drs', 'Prof', 'Profs', 'Mr', 'Mrs', 'Ms', 'Mx', 'St',
     'Hon', 'Pres', 'Gov', 'Sen', 'Rep', 'Capt', 'Col', 'Gen', 'Lt', 'Sgt',
-    // units / measures commonly abbreviated mid-sentence
-    'min', 'hr', 'hrs', 'wk', 'yr', 'yrs', 'mo', 'deg', 'wt',
-    'conc', 'temp', 'avg', 'std', 'dev', 'est', 'max', 'diam',
     // orgs / places
     'Inc', 'Ltd', 'Corp', 'Co', 'Univ', 'Dept', 'Inst', 'Natl', 'Intl',
     'Mt', 'Ave', 'Blvd', 'Rd',
@@ -52,9 +49,19 @@
     'Nov', 'Dec', 'Mon', 'Tue', 'Tues', 'Wed', 'Thu', 'Thur', 'Thurs', 'Fri', 'Sat', 'Sun'
   ];
 
-  // These DO sometimes end a sentence ("...mice, rats, etc."). Mask the period
-  // only when what follows looks like a continuation, not a new sentence.
-  var CONDITIONAL = ['etc', 'al', 'Jr', 'Sr', 'Ph.D', 'PhD', 'M.D', 'D.Phil', 'B.A', 'M.A', 'M.Sc', 'B.Sc'];
+  // These DO sometimes end a sentence ("...mice, rats, etc.", "Each run took
+  // 6.5 min."). Mask the period only when what follows looks like a
+  // continuation rather than a new sentence.
+  //
+  // Units belong here, not above: a methods section ends sentences with them
+  // constantly, and always-masking "min." silently welds two sentences
+  // together - which then get read aloud as one and translated as one.
+  var CONDITIONAL = [
+    'etc', 'al', 'Jr', 'Sr', 'Ph.D', 'PhD', 'M.D', 'D.Phil', 'B.A', 'M.A', 'M.Sc', 'B.Sc',
+    // units / measures
+    'min', 'hr', 'hrs', 'wk', 'yr', 'yrs', 'mo', 'deg', 'wt', 'ml', 'mm', 'cm', 'kg',
+    'conc', 'temp', 'avg', 'std', 'dev', 'est', 'max', 'diam'
+  ];
 
   function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
   function byLengthDesc(a, b) { return b.length - a.length; }

@@ -23,6 +23,13 @@
 
 * { box-sizing: border-box; }
 
+/* An author `display` beats the user-agent's [hidden] rule, so every element
+   this page hides with .hidden = true would otherwise stay visible. In the
+   reader that means the drop zone, the spinner and the document all showing at
+   once; here it means conditional settings never hide. */
+[hidden] { display: none !important; }
+
+
 html, body {
   margin: 0;
   padding: 0;
