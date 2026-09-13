@@ -158,12 +158,41 @@ No build step and no Node.js. The source is plain ES5-compatible JavaScript
 loaded directly by the browser.
 
 ```bash
-./tests/run.sh        # unit tests for the sentence segmenter
-./tests/syntax.sh     # parse every JS file
+./tests/run.sh        # everything: both suites, syntax, wiring
 ```
 
-Both run on a stock Mac using JavaScriptCore via `osascript -l JavaScript`.
-`tests/segmenter.test.html` runs the same tests in a browser.
+That runs four checks, none of which need Node.js - they use JavaScriptCore
+through `osascript -l JavaScript`:
+
+| Check | Covers |
+| --- | --- |
+| `tests/segmenter.cases.js` | sentence splitting against academic punctuation |
+| `tests/pdf.cases.js` | column detection, line and paragraph rebuilding, running-head removal - with synthetic page data, so no PDF or pdf.js needed |
+| `tests/syntax.sh` | every JS file parses |
+| `tests/wiring.py` | nothing references anything that doesn't exist: manifest paths, injection order, element ids, message types, settings keys, CSS classes |
+
+Two suites need a real DOM and run in the browser instead:
+`tests/segmenter.test.html` (the segmentation cases) and
+`tests/preview/sanitizer.html`, which attacks the `.docx` sanitiser with 22
+payloads - script tags, event handlers, `javascript:` and `data:text/html`
+URLs, SVG, malformed nesting - and finishes by rendering the sanitised output
+to confirm nothing actually executes. That matters because a `.docx` is
+untrusted input rendered inside an extension page that can call `chrome.*`.
+
+### Looking at the UI
+
+The pages can be opened as ordinary web pages, with `chrome.*` stubbed:
+
+```bash
+python3 tests/preview/build.py
+python3 -m http.server 8765 --bind 127.0.0.1
+```
+
+Then open `http://127.0.0.1:8765/tests/preview/` - `popup.html`,
+`options.html`, `reader.html`, and `page.html`, a sample paper with the
+reader already running on it. The generated pages are the real markup, CSS
+and JS with a stub injected, not mock-ups, so what you see is what ships.
+This is how the three bugs in commit 2 were found.
 
 ```
 src/

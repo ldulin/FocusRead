@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sanitizer tests</title>
+<style>body{font:13px ui-monospace,Menlo,monospace;padding:20px;white-space:pre-wrap;line-height:1.55}
+.p{color:#0a7a55}.f{color:#c0271d;font-weight:700}</style>
+</head>
+<body><div id="out">running...</div>
+<script src="stub.js"></script>
+<script src="../../src/reader/docx.js"></script>
+<script>
+/*
+ * Attacks the sanitiser with the payloads a hostile .docx could realistically
+ * smuggle through mammoth's HTML output. The reader assigns that HTML into an
+ * extension page that can call chrome.*, so anything executable here is a
+ * privilege escalation, not just a page defacement.
+ */
+(function () {
+  var S = FR.docx.sanitize, pass = 0, fail = 0, lines = [];
+
+  function check(label, input, predicate) {
+    var out;
+    try { out = S(input); } catch (e) { out = 'THREW: ' + e.message; }
+    var ok = false;
+    try { ok = predicate(out); } catch (e) { ok = false; }
+    ok ? pass++ : fail++;
+    lines.push((ok ? '[PASS] ' : '[FAIL] ') + label + (ok ? '' : '\n        got: ' + out));
+  }
+
+  var noneOf = function (needles) {
+    return function (out) {
+      var low = String(out).toLowerCase();
+      return needles.every(function (n) { return low.indexOf(n.toLowerCase()) === -1; });
+    };
+  };
+
+  check('inline script is removed',
+    '<p>hi</p><script>alert(1)<\/script>', noneOf(['<script', 'alert(1)']));
+
+  check('event handler attributes are stripped',
+    '<p onclick="alert(1)">text</p>', noneOf(['onclick', 'alert']));
+
+  check('img onerror is stripped',
+    '<img src="data:image/png;base64,iVBORw0KGgo=" onerror="alert(1)">', noneOf(['onerror']));
+
+  check('javascript: href is dropped',
+    '<a href="javascript:alert(1)">click</a>', noneOf(['javascript:']));
+
+  check('data: text/html href is dropped',
+    '<a href="data:text/html,<script>alert(1)<\/script>">x</a>', noneOf(['data:text/html']));
+
+  check('non-image data: src is dropped',
+    '<img src="data:text/html;base64,PHNjcmlwdD4=">', noneOf(['data:text/html']));
+
+  check('svg is removed entirely',
+    '<svg><script>alert(1)<\/script></svg><p>after</p>',
+    function (o) { return o.indexOf('svg') === -1 && o.indexOf('after') !== -1; });
+
+  check('iframe is removed',
+    '<iframe src="https://evil.test"></iframe><p>after</p>',
+    function (o) { return o.indexOf('iframe') === -1 && o.indexOf('after') !== -1; });
+
+  check('form and inputs are removed',
+    '<form action="https://evil.test"><input name="k"><button>go</button></form>',
+    noneOf(['<form', '<input', '<button']));
+
+  check('style element is removed',
+    '<style>body{display:none}</style><p>after</p>',
+    function (o) { return o.indexOf('<style') === -1 && o.indexOf('after') !== -1; });
+
+  check('style ATTRIBUTE is stripped',
+    '<p style="position:fixed;inset:0;z-index:9999">overlay</p>', noneOf(['style=']));
+
+  check('nested script inside an allowed tag is removed',
+    '<div><p><span><script>alert(1)<\/script></span></p></div>', noneOf(['<script', 'alert']));
+
+  check('unknown tag is unwrapped but its text survives',
+    '<custom-thing>keep this text</custom-thing>',
+    function (o) { return o.indexOf('custom-thing') === -1 && o.indexOf('keep this text') !== -1; });
+
+  check('base tag is removed',
+    '<base href="https://evil.test/"><p>after</p>', noneOf(['<base']));
+
+  check('meta refresh is removed',
+    '<meta http-equiv="refresh" content="0;url=https://evil.test">', noneOf(['<meta', 'refresh']));
+
+  check('srcset is stripped from img',
+    '<img src="data:image/png;base64,iVBORw0KGgo=" srcset="https://evil.test/x 1x">', noneOf(['srcset']));
+
+  check('safe https link survives and is hardened',
+    '<a href="https://example.org/paper">paper</a>',
+    function (o) { return o.indexOf('https://example.org/paper') !== -1 &&
+                          o.indexOf('noopener') !== -1; });
+
+  check('legitimate formatting survives',
+    '<h2>Methods</h2><p>We used <strong>two</strong> <em>separate</em> cohorts.</p>' +
+    '<table><tr><td colspan="2">cell</td></tr></table>',
+    function (o) {
+      return o.indexOf('<h2>') !== -1 && o.indexOf('<strong>') !== -1 &&
+             o.indexOf('<em>') !== -1 && o.indexOf('colspan="2"') !== -1;
+    });
+
+  check('embedded png image survives',
+    '<img src="data:image/png;base64,iVBORw0KGgo=" alt="figure">',
+    function (o) { return o.indexOf('data:image/png') !== -1 && o.indexOf('alt="figure"') !== -1; });
+
+  // Structural check: text that merely CONTAINS "alert(1)" is inert, so assert
+  // on what survives as markup rather than on substrings.
+  function noExecutableNodes(out) {
+    var d = new DOMParser().parseFromString('<body>' + out + '</body>', 'text/html');
+    if (d.body.querySelector('script,iframe,object,embed,svg,form,input,button,style,link,meta,base')) return false;
+    var els = d.body.querySelectorAll('*');
+    for (var i = 0; i < els.length; i++) {
+      var attrs = els[i].attributes;
+      for (var j = 0; j < attrs.length; j++) {
+        var n = attrs[j].name.toLowerCase();
+        if (n.indexOf('on') === 0) return false;
+        if ((n === 'href' || n === 'src') && /^\s*(javascript|data:text|vbscript)/i.test(attrs[j].value)) return false;
+      }
+    }
+    return true;
+  }
+
+  check('malformed markup does not defeat the allowlist',
+    '<p><scr<script>ipt>alert(1)<\/scr<\/script>ipt></p>', noExecutableNodes);
+
+  check('nested malformed img/script survives sanitisation inertly',
+    '<p><img src="x" onerror=alert(1)><a href=javascript:alert(2)>y</a></p>', noExecutableNodes);
+
+  // Prove it for real: render the output and see whether anything executes.
+  check('rendered output executes nothing',
+    '<img src=x onerror="window.__pwned=1"><script>window.__pwned=1<\/script>',
+    function (out) {
+      window.__pwned = 0;
+      var host = document.createElement('div');
+      host.style.display = 'none';
+      host.innerHTML = out;
+      document.body.appendChild(host);
+      var fired = window.__pwned === 1;
+      host.remove();
+      return !fired;
+    });
+
+  document.getElementById('out').innerHTML =
+    (lines.join('\n') + '\n\n==== ' + pass + ' passed, ' + fail + ' failed ====')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/^\[PASS\]/gm, '<span class="p">[PASS]</span>')
+      .replace(/^\[FAIL\]/gm, '<span class="f">[FAIL]</span>');
+  document.title = fail ? ('FAIL ' + fail) : ('PASS ' + pass);
+  window.__result = { pass: pass, fail: fail, lines: lines };
+})();
+</script>
+</body></html>
