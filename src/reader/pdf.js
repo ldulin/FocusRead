@@ -205,8 +205,9 @@
       var edges = lines.slice(0, 2).concat(lines.slice(-2));
       var seen = {};
       edges.forEach(function (ln) {
+        if (!isFurniture(ln.text)) return;
         var key = normaliseForRepeat(ln.text);
-        if (!key || key.length > 90 || seen[key]) return;
+        if (!key || seen[key]) return;
         seen[key] = 1;
         counts[key] = (counts[key] || 0) + 1;
       });
@@ -219,6 +220,23 @@
   }
 
   var PAGE_NUMBER = /^[\s|.\-]*(?:page\s*)?\d{1,4}(?:\s*(?:of|\/)\s*\d{1,4})?[\s|.\-]*$/i;
+
+  /**
+   * Guard against deleting real prose.
+   *
+   * Because normaliseForRepeat() turns every digit into a placeholder, any line
+   * that differs between pages ONLY by a number looks repeated. That is exactly
+   * what a running head is - and it would also match a body line that happened
+   * to differ only in a figure number. Running heads are short, and they are
+   * not mid-sentence continuations, so require both.
+   */
+  function isFurniture(text) {
+    var t = String(text).trim();
+    if (!t || t.length > 70) return false;              // heads are short
+    if (/^[\p{Ll}]/u.test(t)) return false;             // a sentence continuing
+    if (/[.!?]["'\u2019\u201D)\]]?$/.test(t) && t.split(/\s+/).length > 6) return false;
+    return true;
+  }
 
   /* ------------------------------------------------------------------ *
    * Paragraph assembly
@@ -432,6 +450,21 @@
     open: open,
     extractReflow: extractReflow,
     renderPage: renderPage,
-    available: function () { return lib().then(function () { return true; }, function () { return false; }); }
+    available: function () { return lib().then(function () { return true; }, function () { return false; }); },
+    // Exposed for tests. The layout reconstruction is pure geometry, so it can
+    // be exercised with synthetic text runs without pdf.js present.
+    _internals: {
+      toBoxes: toBoxes,
+      detectColumns: detectColumns,
+      toLines: toLines,
+      linesToBlocks: linesToBlocks,
+      findRunningHeads: findRunningHeads,
+      normaliseForRepeat: normaliseForRepeat,
+      isFurniture: isFurniture,
+      isHeadingLine: isHeadingLine,
+      joinItems: joinItems,
+      median: median,
+      PAGE_NUMBER: PAGE_NUMBER
+    }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
