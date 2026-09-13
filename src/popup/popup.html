@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FocusRead</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<header>
+  <img src="../../icons/icon32.png" alt="" width="22" height="22">
+  <strong>FocusRead</strong>
+  <span class="grow"></span>
+  <button id="settings" class="linky" title="All settings">Settings</button>
+</header>
+
+<button id="start" class="cta">Start reading this page</button>
+<p id="pageNote" class="note" hidden></p>
+
+<section class="row">
+  <label for="focusMode">Focus</label>
+  <select id="focusMode">
+    <option value="off">Off</option>
+    <option value="spotlight">Dim the rest</option>
+    <option value="ruler">Reading ruler</option>
+  </select>
+</section>
+
+<section class="row">
+  <label for="rate">Speed</label>
+  <input type="range" id="rate" min="0.5" max="2" step="0.05">
+  <output id="rateOut" class="mono">1.0x</output>
+</section>
+
+<section class="row">
+  <label for="targetLang">Translate to</label>
+  <select id="targetLang"></select>
+</section>
+
+<section class="row">
+  <label for="bilingual">Under every sentence</label>
+  <input type="checkbox" id="bilingual">
+</section>
+
+<div id="engine" class="engine">
+  <div class="engineRow">
+    <span id="engineDot" class="dot"></span>
+    <span id="engineText">Checking translator...</span>
+  </div>
+  <button id="download" class="small" hidden>Download language pack</button>
+  <div id="dlTrack" class="track" hidden><div id="dlBar" class="fill"></div></div>
+</div>
+
+<footer>
+  <button id="openDoc" class="ghost">Open a PDF or Word file</button>
+  <p class="keys">
+    <span><kbd>Space</kbd> play</span>
+    <span><kbd>J</kbd>/<kbd>K</kbd> sentence</span>
+    <span><kbd>T</kbd> translate</span>
+    <span><kbd>F</kbd> focus</span>
+  </p>
+</footer>
+
+<script src="../lib/segmenter.js"></script>
+<script src="../lib/settings.js"></script>
+<script src="../lib/translate.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

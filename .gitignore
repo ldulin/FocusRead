@@ -1,0 +1,15 @@
+# Third-party libraries, installed by scripts/fetch-vendor.sh
+vendor/*
+!vendor/README.md
+
+# Packaged builds
+*.zip
+*.crx
+*.pem
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

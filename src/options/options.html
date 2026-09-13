@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FocusRead settings</title>
+<link rel="stylesheet" href="options.css">
+</head>
+<body>
+
+<div id="welcome" class="welcome" hidden>
+  <h2>FocusRead is installed</h2>
+  <ol>
+    <li>Open a paper, then click the FocusRead icon (or press <kbd>Alt</kbd>+<kbd>R</kbd>).</li>
+    <li>Click any sentence to hear it. <kbd>Space</kbd> plays and pauses, <kbd>J</kbd> and <kbd>K</kbd> move a sentence at a time.</li>
+    <li>Select a word or sentence to see a translation. <kbd>B</kbd> shows one under every sentence.</li>
+    <li>For a PDF or Word file on your computer, use <strong>Open a PDF or Word file</strong> in the popup.</li>
+  </ol>
+  <p class="fine">Translation defaults to Chrome's on-device engine: free, private, and it works offline once the language pack downloads.</p>
+</div>
+
+<header>
+  <img src="../../icons/icon48.png" alt="" width="30" height="30">
+  <h1>FocusRead</h1>
+  <span class="grow"></span>
+  <span id="saved" class="saved" hidden>Saved</span>
+</header>
+
+<nav id="tabs"></nav>
+<main id="panels"></main>
+
+<footer>
+  <button id="clearCache" class="ghost">Clear translation cache</button>
+  <button id="reset" class="danger">Reset all settings</button>
+  <span class="grow"></span>
+  <a href="https://github.com" id="repoLink" class="fine" target="_blank" rel="noopener">Source &amp; docs</a>
+</footer>
+
+<script src="../lib/segmenter.js"></script>
+<script src="../lib/settings.js"></script>
+<script src="../lib/translate.js"></script>
+<script src="../content/speech.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

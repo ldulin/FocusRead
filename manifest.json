@@ -1,0 +1,84 @@
+{
+  "manifest_version": 3,
+  "name": "FocusRead",
+  "version": "0.1.0",
+  "description": "Read papers sentence by sentence: click any sentence to hear it, dim the rest to stay focused, and translate a word, a sentence, or the whole page.",
+  "minimum_chrome_version": "116",
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "action": {
+    "default_title": "FocusRead",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "contextMenus"
+  ],
+
+  "optional_permissions": [
+    "declarativeNetRequest"
+  ],
+
+  "host_permissions": [
+    "https://api.mymemory.translated.net/*",
+    "https://translation.googleapis.com/*"
+  ],
+
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+
+  "commands": {
+    "toggle-reader": {
+      "suggested_key": { "default": "Alt+R", "mac": "Alt+R" },
+      "description": "Turn FocusRead on or off for this page"
+    },
+    "play-pause": {
+      "suggested_key": { "default": "Alt+P", "mac": "Alt+P" },
+      "description": "Start or pause reading aloud"
+    },
+    "open-reader": {
+      "suggested_key": { "default": "Alt+O", "mac": "Alt+O" },
+      "description": "Open a PDF or Word file in the FocusRead reader"
+    }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/reader/reader.html",
+        "src/content/content.css",
+        "vendor/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+}

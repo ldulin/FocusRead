@@ -1,0 +1,86 @@
+:root {
+  --bg: #f4f5f7; --card: #fff; --ink: #1b1d21; --muted: #6b7078;
+  --line: rgba(0,0,0,.12); --accent: #1f6feb; --danger: #c5221f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121417; --card: #1b1d21; --ink: #e6e8ec; --muted: #9aa0a8;
+    --line: rgba(255,255,255,.14); --accent: #5c9bff; --danger: #ff7b72;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 26px 22px 60px; max-width: 780px;
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+header { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+h1 { font-size: 19px; margin: 0; letter-spacing: -.02em; }
+.grow { flex: 1; }
+.saved { font-size: 12px; color: #1a7f37; }
+@media (prefers-color-scheme: dark) { .saved { color: #3fb950; } }
+
+.welcome {
+  background: color-mix(in srgb, var(--accent) 11%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 13px; padding: 18px 22px; margin-bottom: 20px;
+}
+.welcome h2 { margin: 0 0 9px; font-size: 16px; }
+.welcome ol { margin: 0; padding-left: 20px; }
+.welcome li { margin: 5px 0; }
+
+nav { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 16px; }
+nav button {
+  font: inherit; font-size: 13px; cursor: pointer; padding: 7px 13px;
+  border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--muted);
+}
+nav button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+nav button.on { background: var(--card); color: var(--ink); font-weight: 600; border-color: var(--line); }
+
+section.panel { display: none; }
+section.panel.on { display: block; }
+
+.group { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 5px 20px; margin-bottom: 15px; }
+.group > h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 5px; }
+
+.field { display: flex; align-items: center; gap: 15px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.field:last-child { border-bottom: 0; }
+.field .label { flex: 1; min-width: 0; }
+.field .label b { display: block; font-weight: 550; }
+.field .hint { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+.field .control { flex: none; display: flex; align-items: center; gap: 8px; }
+
+input, select, textarea { font: inherit; color: var(--ink); background: var(--card); }
+input[type=text], input[type=password], input[type=number], select, textarea {
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px;
+}
+input[type=text], input[type=password] { width: 240px; }
+input[type=number] { width: 84px; }
+textarea { width: 260px; height: 62px; resize: vertical; font-size: 13px; }
+select { max-width: 240px; }
+input[type=range] { width: 160px; accent-color: var(--accent); }
+input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); }
+input[type=color] { width: 38px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
+output { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 44px; text-align: right; font-size: 13px; }
+
+button.ghost, button.danger {
+  font: inherit; font-size: 13px; cursor: pointer; padding: 8px 14px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink);
+}
+button.ghost:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+button.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+footer { display: flex; align-items: center; gap: 9px; margin-top: 22px; }
+.fine { font-size: 12.5px; color: var(--muted); }
+a { color: var(--accent); }
+kbd {
+  font: inherit; font-size: 11.5px; padding: 1px 5px; border: 1px solid var(--line);
+  border-bottom-width: 2px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.callout {
+  margin: 12px 0; padding: 11px 14px; border-radius: 10px; font-size: 13px; line-height: 1.55;
+  background: color-mix(in srgb, #f5c518 15%, var(--card));
+  border: 1px solid color-mix(in srgb, #f5c518 42%, transparent);
+}

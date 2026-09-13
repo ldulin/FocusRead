@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>FocusRead segmenter tests</title>
+<style>
+  body{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;padding:20px;white-space:pre-wrap;line-height:1.55}
+  .p{color:#0a7a55}.f{color:#c0271d;font-weight:700}
+</style>
+<body><div id="out">running...</div>
+<script src="../src/lib/segmenter.js"></script>
+<script src="./segmenter.cases.js"></script>
+<script>
+  var r = FR.tests.run();
+  document.getElementById('out').innerHTML = r.report
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/^\[PASS\]/gm, '<span class="p">[PASS]</span>')
+    .replace(/^\[FAIL\]/gm, '<span class="f">[FAIL]</span>');
+  document.title = r.fail ? ('FAIL ' + r.fail) : ('PASS ' + r.pass);
+</script>

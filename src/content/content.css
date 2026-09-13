@@ -1,0 +1,175 @@
+/*
+ * FocusRead - styles injected into the page being read.
+ *
+ * Everything is scoped to our own custom elements (<fr-s>, <fr-b>, <fr-t>) or
+ * to a class on <html>, so nothing here can touch a page we are not active on.
+ * The floating toolbar and popup live in a shadow root and are styled there.
+ *
+ * !important is used deliberately: we are competing with whatever the site
+ * already declares, and a highlight that loses the cascade is a broken feature.
+ */
+
+:root {
+  --fr-hl: #f5c518;
+  --fr-word: #ff8a3d;
+  --fr-dim: 0.3;
+  --fr-scale: 1;
+  --fr-lh: 1.7;
+  --fr-ls: 0px;
+  --fr-ws: 0px;
+  --fr-mw: 42rem;
+  --fr-ff: inherit;
+}
+
+/* ---- sentence wrappers must be layout-invisible ---- */
+fr-s {
+  display: inline !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-style: inherit;
+  font-family: inherit;
+  vertical-align: baseline !important;
+  border-radius: 3px;
+  transition: background-color .16s ease, opacity .16s ease, box-shadow .16s ease;
+}
+
+/* ---- click-to-read affordance (only while the reader is active) ---- */
+html.fr-active fr-s { cursor: pointer; }
+html.fr-active fr-s:hover:not(.fr-cur) {
+  background-color: color-mix(in srgb, var(--fr-hl) 22%, transparent);
+}
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  html.fr-active fr-s:hover:not(.fr-cur) { background-color: rgba(245, 197, 24, .22); }
+}
+
+/* ---- the sentence being read ---- */
+html.fr-hl-underline fr-s.fr-cur {
+  background-image: linear-gradient(to top, var(--fr-hl) 0, var(--fr-hl) .18em, transparent .18em);
+}
+html.fr-hl-block fr-s.fr-cur {
+  background-color: var(--fr-hl) !important;
+  color: #1a1a1a !important;
+  box-shadow: 0 0 0 .12em var(--fr-hl);
+}
+html.fr-hl-box fr-s.fr-cur {
+  box-shadow: 0 0 0 2px var(--fr-hl);
+}
+html.fr-hl-none fr-s.fr-cur { font-weight: 600; }
+
+/* ---- word-level karaoke highlight (CSS Custom Highlight API, no DOM churn) ---- */
+::highlight(fr-word) {
+  background-color: var(--fr-word);
+  color: #14110b;
+}
+
+/* ---- focus: spotlight the current sentence, fade the rest ---- */
+html.fr-focus-spotlight fr-s:not(.fr-cur) { opacity: var(--fr-dim); }
+html.fr-focus-spotlight fr-s.fr-cur { opacity: 1 !important; }
+/* Never fade a sentence the reader is pointing at - they may be choosing it. */
+html.fr-focus-spotlight fr-s:hover { opacity: .85; }
+
+/* Ruler mode dims by overlay instead, so sentences keep full contrast. */
+html.fr-focus-ruler fr-s:not(.fr-cur) { opacity: 1; }
+
+#fr-ruler-top, #fr-ruler-bottom {
+  position: fixed;
+  left: 0;
+  width: 100vw;
+  background: rgba(0, 0, 0, var(--fr-dim));
+  pointer-events: none;
+  z-index: 2147483640;
+  transition: height .18s ease, top .18s ease;
+}
+#fr-ruler-top { top: 0; }
+#fr-ruler-bottom { bottom: 0; }
+
+/* ---- bionic reading ---- */
+fr-b {
+  font-weight: 700 !important;
+  display: inline !important;
+  color: inherit;
+  background: transparent;
+}
+
+/* ---- inline translation (bilingual mode) ---- */
+fr-t {
+  display: block !important;
+  margin: .25em 0 .55em 0 !important;
+  padding: .1em 0 .1em .7em !important;
+  border-left: 3px solid color-mix(in srgb, var(--fr-hl) 60%, transparent);
+  font-size: calc(1em * var(--fr-bi-scale, .92)) !important;
+  line-height: 1.6 !important;
+  color: #4a6b8a;
+  font-family: inherit;
+  opacity: .95;
+  text-align: start;
+  white-space: normal;
+}
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  fr-t { border-left-color: rgba(245, 197, 24, .6); }
+}
+fr-t:empty { display: none !important; }
+fr-t.fr-t-pending {
+  color: #8a8a8a;
+  font-style: italic;
+}
+fr-t.fr-t-error {
+  color: #b3261e;
+  border-left-color: #b3261e;
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+  fr-t { color: #9dc0e0; }
+  html.fr-hl-block fr-s.fr-cur { color: #14110b !important; }
+}
+
+/* ---- reading typography (opt-in) ---- */
+html.fr-typo p,
+html.fr-typo li,
+html.fr-typo dd,
+html.fr-typo blockquote,
+html.fr-typo td,
+html.fr-typo figcaption {
+  font-size: calc(1rem * var(--fr-scale)) !important;
+  line-height: var(--fr-lh) !important;
+  letter-spacing: var(--fr-ls) !important;
+  word-spacing: var(--fr-ws) !important;
+  font-family: var(--fr-ff) !important;
+}
+html.fr-typo h1, html.fr-typo h2, html.fr-typo h3,
+html.fr-typo h4, html.fr-typo h5, html.fr-typo h6 {
+  line-height: 1.3 !important;
+  font-family: var(--fr-ff) !important;
+}
+
+html.fr-width p,
+html.fr-width li,
+html.fr-width blockquote,
+html.fr-width h1, html.fr-width h2, html.fr-width h3 {
+  max-width: var(--fr-mw) !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* ---- paper tints ---- */
+html.fr-tint-sepia body { background-color: #f6eddc !important; color: #3a3226 !important; }
+html.fr-tint-gray body  { background-color: #e9eaec !important; color: #23262b !important; }
+html.fr-tint-dark body  { background-color: #15171a !important; color: #d7dade !important; }
+html.fr-tint-dark fr-t  { color: #8fb4d6; }
+html.fr-tint-dark img:not([src*=".svg"]) { filter: brightness(.88) contrast(1.02); }
+
+/* Respect a reader who has asked the OS for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  fr-s, #fr-ruler-top, #fr-ruler-bottom { transition: none !important; }
+}
+
+/* Keep our marks out of printed output. */
+@media print {
+  fr-s { background: none !important; box-shadow: none !important; opacity: 1 !important; }
+  #fr-ruler-top, #fr-ruler-bottom, fr-ui { display: none !important; }
+}
