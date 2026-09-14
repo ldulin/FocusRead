@@ -58,6 +58,17 @@
     dl.hidden = true;
     $('dlTrack').hidden = true;
 
+    if (settings.provider === 'auto') {
+      // Report what it will actually do, not just that it is on auto.
+      dot.className = 'dot ok';
+      text.textContent = 'Checking which translator is available...';
+      return FR.translate.builtinUsable('en', settings.targetLang).then(function (ok) {
+        dot.className = 'dot ok';
+        text.textContent = ok
+          ? 'Using Chrome\'s on-device translator (free, offline).'
+          : 'Chrome\'s on-device translator is not ready here, so Google Translate is used instead.';
+      });
+    }
     if (settings.provider !== 'builtin') {
       dot.className = 'dot ok';
       text.textContent = 'Using ' + providerLabel(settings.provider) + '.';
@@ -98,8 +109,10 @@
   }
 
   function providerLabel(p) {
-    return { builtin: 'Chrome built-in', mymemory: 'MyMemory (free)', libre: 'LibreTranslate',
-             google: 'Google Translate', openai: 'an LLM endpoint' }[p] || p;
+    return { auto: 'automatic engine selection', builtin: 'Chrome built-in',
+             'google-free': 'Google Translate (free)', mymemory: 'MyMemory (free)',
+             libre: 'LibreTranslate', google: 'Google Cloud Translation',
+             openai: 'an LLM endpoint' }[p] || p;
   }
 
   // Runs inside a click handler so the download has user activation.

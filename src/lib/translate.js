@@ -31,6 +31,7 @@
   var MAP = {
     mymemory: { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'pt': 'pt-PT', 'he': 'he-IL' },
     google:   { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'he': 'iw' },
+    'google-free': { 'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', 'he': 'iw' },
       libre:    { 'zh-Hans': 'zh', 'zh-Hant': 'zt' },
     builtin:  {},
     openai:   {}
@@ -486,6 +487,65 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Provider: Google Translate, keyless.
+   *
+   * The endpoint the Google Translate widget itself calls. No key, no quota to
+   * configure, and markedly more fluent than MyMemory on academic prose. It is
+   * NOT a documented API: Google can change or rate-limit it without notice,
+   * which is why the UI labels it unofficial and why the auto chain can fall
+   * past it. Nothing is sent but the sentences being translated.
+   * ------------------------------------------------------------------ */
+
+  var GTX_MAX_CHARS = 1400;          // it is a GET; keep the URL well inside limits
+
+  function gtxOnce(text, src, tgt) {
+    var url = 'https://translate.googleapis.com/translate_a/single' +
+      '?client=gtx&dt=t' +
+      '&sl=' + encodeURIComponent(src === 'auto' ? 'auto' : lang('google', src)) +
+      '&tl=' + encodeURIComponent(lang('google', tgt)) +
+      '&q=' + encodeURIComponent(text);
+
+    return fetch(url).then(function (r) {
+      if (r.status === 429) {
+        throw Object.assign(new Error('Google is rate-limiting this endpoint. Try again shortly, or switch engine.'),
+                            { code: 'quota' });
+      }
+      if (!r.ok) throw Object.assign(new Error('Google returned ' + r.status), { code: 'provider' });
+      return r.json();
+    }).then(function (j) {
+      var parts = j && j[0];
+      if (!Array.isArray(parts)) throw Object.assign(new Error('Unexpected response shape'), { code: 'provider' });
+      var out = parts.map(function (p) { return (p && p[0]) || ''; }).join('');
+      if (!out) throw Object.assign(new Error('Empty translation'), { code: 'provider' });
+      return out;
+    });
+  }
+
+  function viaGoogleFree(texts, src, tgt) {
+    return pooled(texts, 4, function (t) {
+      var chunks = [];
+      if (t.length <= GTX_MAX_CHARS) chunks = [t];
+      else {
+        var parts = (FR.segmenter && FR.segmenter.chunk)
+          ? FR.segmenter.chunk(t, 600, 60).map(function (c) { return c.text; })
+          : [t];
+        parts.forEach(function (part) {
+          for (var i = 0; i < part.length; i += GTX_MAX_CHARS) {
+            chunks.push(part.slice(i, i + GTX_MAX_CHARS));
+          }
+        });
+      }
+      return serial(chunks, function (c) {
+        return gtxOnce(c, src, tgt).then(function (text) { return { ok: true, text: text }; });
+      }).then(function (parts) {
+        var bad = parts.filter(function (p) { return !p.ok; })[0];
+        if (bad) return bad;
+        return { ok: true, text: parts.map(function (p) { return p.text; }).join('') };
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
    * Provider: LibreTranslate (self-hosted or public instance)
    * ------------------------------------------------------------------ */
 
@@ -688,8 +748,8 @@
   }
 
   var PROVIDERS = {
-    builtin: viaBuiltin, mymemory: viaMyMemory, libre: viaLibre,
-    google: viaGoogle, openai: viaOpenAI
+    builtin: viaBuiltin, 'google-free': viaGoogleFree, mymemory: viaMyMemory,
+    libre: viaLibre, google: viaGoogle, openai: viaOpenAI
   };
 
   // Providers that take a whole array in one request.
@@ -701,11 +761,14 @@
    * ------------------------------------------------------------------ */
 
   /**
+   * Translate with ONE named provider. Caching is keyed per concrete provider,
+   * which is why the auto chain resolves to a real name before calling this.
+   *
    * @param {string[]} texts
    * @param {{provider,sourceLang,targetLang,providerConfig,cache,onProgress}} opts
    * @returns {Promise<Array<{ok:boolean,text?:string,error?:string,code?:string}>>}
    */
-  function translateBatch(texts, opts) {
+  function translateOnce(texts, opts) {
     opts = opts || {};
     var provider = opts.provider || 'builtin';
     var src = opts.sourceLang || 'auto';
@@ -772,6 +835,106 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Automatic engine selection
+   *
+   * The default. Chrome's on-device translator is the best answer when it
+   * works - free, private, offline - but on plenty of machines its
+   * availability probe never answers at all, and making that the default meant
+   * translation silently did nothing. So try it once, quickly, and fall
+   * through to engines that need no setup.
+   * ------------------------------------------------------------------ */
+
+  var AUTO_CHAIN = ['builtin', 'google-free', 'mymemory'];
+
+  var autoState = { builtinChecked: false, builtinOk: false, dead: {} };
+
+  /** Is the built-in translator ready RIGHT NOW? Probed once, briefly. */
+  function builtinUsable(src, tgt) {
+    if (autoState.builtinChecked) return Promise.resolve(autoState.builtinOk);
+    if (!builtinAvailable()) {
+      autoState.builtinChecked = true;
+      autoState.builtinOk = false;
+      return Promise.resolve(false);
+    }
+    return withTimeout(builtinStatus(src, tgt), 2000, function (resolve) { resolve('timeout'); })
+      .then(function (st) {
+        autoState.builtinChecked = true;
+        // Only "available" counts. "downloadable" needs a user gesture, which
+        // a mid-page translation does not have, and "unknown" is what a
+        // hanging probe looks like.
+        autoState.builtinOk = (st === 'available');
+        return autoState.builtinOk;
+      }, function () {
+        autoState.builtinChecked = true;
+        autoState.builtinOk = false;
+        return false;
+      });
+  }
+
+  // Failures worth giving up on for the session rather than retrying per batch.
+  var FATAL = { quota: 1, auth: 1, config: 1, network: 1, offline: 1,
+                'builtin-unavailable': 1, 'builtin-in-worker': 1, 'builtin-pair': 1,
+                'builtin-timeout': 1, 'builtin-needs-gesture': 1 };
+
+  function allFailed(results) {
+    return results.length > 0 && results.every(function (r) { return r && !r.ok; });
+  }
+
+  function translateAuto(texts, opts) {
+    var src = opts.sourceLang || 'auto';
+    var tgt = opts.targetLang || 'zh-Hans';
+
+    var chain = AUTO_CHAIN.filter(function (p) {
+      return PROVIDERS[p] && !autoState.dead[p];
+    });
+
+    return builtinUsable(src === 'auto' ? 'en' : src, tgt).then(function (ok) {
+      if (!ok) chain = chain.filter(function (p) { return p !== 'builtin'; });
+      if (!chain.length) {
+        return texts.map(function () {
+          return {
+            ok: false, code: 'config',
+            error: 'No translation engine is working. Open FocusRead settings and pick one.'
+          };
+        });
+      }
+
+      var i = 0;
+      function attempt() {
+        var provider = chain[i];
+        var sub = Object.assign({}, opts, { provider: provider });
+        return translateOnce(texts, sub).then(function (results) {
+          if (!allFailed(results)) {
+            autoState.lastGood = provider;
+            return results;
+          }
+          var code = (results[0] && results[0].code) || 'error';
+          if (FATAL[code]) autoState.dead[provider] = true;
+          i++;
+          if (i < chain.length) return attempt();
+          return results;                       // nothing left; report the last
+        });
+      }
+      return attempt();
+    });
+  }
+
+  /**
+   * Public entry point. `provider: "auto"` walks the chain; any other value
+   * uses exactly that engine so an explicit choice is never overridden.
+   */
+  function translateBatch(texts, opts) {
+    opts = opts || {};
+    if ((opts.provider || 'auto') === 'auto') return translateAuto(texts, opts);
+    return translateOnce(texts, opts);
+  }
+
+  /** Which engine auto last used, for the UI. */
+  function autoStatus() {
+    return { lastGood: autoState.lastGood || null, dead: Object.keys(autoState.dead) };
+  }
+
   function serialGroups(groups, fn) {
     var out = [];
     return groups.reduce(function (p, g) {
@@ -783,6 +946,10 @@
 
   FR.translate = {
     translateBatch: translateBatch,
+    translateOnce: translateOnce,
+    builtinUsable: builtinUsable,
+    autoStatus: autoStatus,
+    AUTO_CHAIN: AUTO_CHAIN,
     builtinAvailable: builtinAvailable,
     builtinStatus: builtinStatus,
     clearCache: clearCache,

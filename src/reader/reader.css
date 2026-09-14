@@ -185,6 +185,10 @@ button.primary:hover { filter: brightness(1.08); }
 /* ---------- original-layout pages ---------- */
 .pages { padding: 26px 16px 40vh; display: flex; flex-direction: column; align-items: center; gap: 22px; }
 .pageWrap {
+  /* The page list is a flex column. Without this, a bounded-height container
+     (the split pane) shrinks every page to zero height - they have an explicit
+     pixel height, but flex-shrink overrides it. */
+  flex: 0 0 auto;
   position: relative;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 10px 30px rgba(0, 0, 0, .1);
@@ -243,4 +247,75 @@ button.primary:hover { filter: brightness(1.08); }
   font-weight: 650;
   color: var(--ink);
   pointer-events: none;
+}
+
+/* ---------- side by side ----------
+   The original pages on the left for figures and layout, the reflowed text on
+   the right where the reading features live. Each pane scrolls on its own, so
+   you can hold a figure still while reading past it. */
+body.split #stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+body.split .splitBar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+body.split .splitBar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+body.split .splitBar input { accent-color: var(--accent); }
+
+/* Source page on the left, the text you read on the right. #doc comes first
+   in the markup (it is the default view), so order puts them back. */
+body.split #pages { order: 1; }
+body.split #doc   { order: 2; }
+
+body.split #pages,
+body.split #doc {
+  overflow-y: auto;
+  overflow-x: auto;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  scroll-behavior: auto;
+}
+body.split #pages {
+  border-right: 1px solid var(--line);
+  padding: 18px 12px 40vh;
+  background: var(--bg);
+}
+body.split #doc {
+  max-width: none;
+  padding: 30px max(24px, 4%) 40vh;
+  background: var(--card);
+}
+/* The notices panel is a child of #stage, so in grid layout it would take a
+   cell of its own and push the two panes into different rows. */
+body.split #notices {
+  grid-column: 1 / -1;
+  order: 0;
+  margin: 0;
+  border-radius: 0;
+  max-width: none;
+}
+
+/* The split panes are their own scrollers, so clearance has to travel with
+   the sentence rather than relying on the document scroller. */
+body.split fr-s { scroll-margin-bottom: 120px; }
+
+@media (max-width: 900px) {
+  /* Too narrow to be worth splitting; stack instead. */
+  body.split #stage { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
+  body.split #pages { border-right: 0; border-bottom: 1px solid var(--line); height: 60vh; }
+  body.split #doc { height: auto; overflow: visible; }
 }

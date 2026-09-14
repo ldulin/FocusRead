@@ -178,6 +178,8 @@
     $('modes').hidden = true;
     $('pager').hidden = true;
     $('notices').hidden = true;
+    $('splitBar').hidden = true;
+    document.body.classList.remove('split');
   }
 
   function showNotices(list) {
@@ -344,6 +346,14 @@
    * ------------------------------------------------------------------ */
 
   function renderReflow() {
+    buildReflow();
+    $('doc').hidden = false;
+    $('pages').hidden = true;
+    hideStatus();
+    return attachController($('doc'), true);
+  }
+
+  function buildReflow() {
     var docEl = $('doc');
     docEl.innerHTML = '';
     var lastPage = 0;
@@ -363,14 +373,9 @@
       if (b.page) el.setAttribute('data-page', String(b.page));
       docEl.appendChild(el);
     });
-
-    docEl.hidden = false;
-    $('pages').hidden = true;
-    hideStatus();
-    return attachController(docEl, true);
   }
 
-  function renderOriginal(gen) {
+  function renderOriginal(gen, skipController) {
     var doc = state.doc;
     if (!doc) return Promise.resolve();
     var host = $('pages');
@@ -380,7 +385,10 @@
     $('doc').hidden = true;
     hideStatus();
 
-    var width = Math.min(900, (root.innerWidth || 900) - 60);
+    // Size to the CONTAINER, not the window: in split view the pane is roughly
+    // half the width, and sizing from the window made every page overflow it.
+    var avail = host.clientWidth || (root.innerWidth || 900);
+    var width = Math.max(260, Math.min(900, avail - 34));
 
     return doc.getPage(1).then(function (p1) {
       // A reset landing inside this await would null state.doc; use the local.
@@ -417,8 +425,37 @@
 
       Array.prototype.forEach.call(host.children, function (c) { state.io.observe(c); });
 
+      // Render what is already on screen without waiting for the observer.
+      // IntersectionObserver callbacks are suspended while a tab is hidden, so
+      // a document opened in a background tab would otherwise show nothing but
+      // blank placeholders until the reader scrolled.
+      renderVisiblePages(host, scale, doc);
+
+      if (skipController) return null;
       return attachController(host, false);
     });
+  }
+
+  /** Render every placeholder currently in (or near) view, by geometry. */
+  function renderVisiblePages(host, scale, doc) {
+    var hostRect = host.getBoundingClientRect();
+    var slots = Array.prototype.slice.call(host.querySelectorAll('[data-placeholder]'));
+    for (var i = 0; i < slots.length; i++) {
+      var slot = slots[i];
+      var n = Number(slot.getAttribute('data-placeholder'));
+      if (!n || state.rendered.has(n)) continue;
+      var r = slot.getBoundingClientRect();
+      if (r.bottom < hostRect.top - 200) continue;
+      if (r.top > hostRect.bottom + 900) break;
+      state.rendered.add(n);
+      if (state.io) state.io.unobserve(slot);
+      (function (page, placeholder) {
+        FR.pdf.renderPage(doc, state.mod, page, host, scale, placeholder).catch(function (err) {
+          state.rendered.delete(page);
+          placeholder.textContent = 'Could not render page ' + page + ': ' + (err.message || err);
+        });
+      })(n, slot);
+    }
   }
 
   function setMode(mode, gen) {
@@ -428,7 +465,33 @@
       b.classList.toggle('on', b.getAttribute('data-mode') === mode);
     });
     if (state.controller) { state.controller.deactivate(); state.controller = null; }
-    return mode === 'original' ? renderOriginal(gen) : renderReflow();
+
+    document.body.classList.toggle('split', mode === 'split');
+    $('splitBar').hidden = mode !== 'split';
+
+    if (mode === 'original') return renderOriginal(gen);
+    if (mode === 'split') return renderSplit(gen);
+    return renderReflow();
+  }
+
+  /**
+   * Both views at once: the real pages on the left, the reflowed text on the
+   * right. The controller attaches to the reflowed side, so every reading
+   * feature works there while the page image stays available for figures.
+   */
+  function renderSplit(gen) {
+    return renderOriginal(gen, true).then(function () {
+      if (gen !== undefined && stale(gen)) return;
+      buildReflow();
+      $('doc').hidden = false;
+      $('pages').hidden = false;
+      hideStatus();
+      wireScrollSync();
+      return attachController($('doc'), true).then(function (c) {
+        syncPagesToReading();          // start the two panes on the same page
+        return c;
+      });
+    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -450,6 +513,8 @@
    * ------------------------------------------------------------------ */
 
   function activeContainer() {
+    // In split view the reflowed text is the one being read, so page
+    // navigation targets it and the image pane follows via the scroll sync.
     return state.mode === 'original' ? $('pages') : $('doc');
   }
 
@@ -473,6 +538,57 @@
   function prefersReducedMotion() {
     try { return root.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     catch (e) { return false; }
+  }
+
+  /**
+   * In split view, follow the reading side with the page image.
+   *
+   * One-directional on purpose: the text is what you read, so it drives. A
+   * two-way sync fights itself as each pane's smooth scroll retriggers the
+   * other.
+   */
+  var syncWired = false;
+  var syncTimer = null;
+
+  function wireScrollSync() {
+    if (syncWired) return;
+    syncWired = true;
+    var docEl = $('doc');
+    docEl.addEventListener('scroll', function () {
+      if (state.mode !== 'split') return;
+      if (!$('syncScroll').checked) return;
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(syncPagesToReading, 90);
+    }, { passive: true });
+  }
+
+  function syncPagesToReading() {
+    if (state.mode !== 'split') return;
+    var box = $('syncScroll');
+    if (box && !box.checked) return;
+    var page = pageAtTop($('doc'));
+    if (!page) return;
+    var host = $('pages');
+    var target = host.querySelector('[data-page="' + page + '"]') ||
+                 host.querySelector('[data-placeholder="' + page + '"]');
+    if (!target) return;
+    // offsetTop is relative to the scrolling pane, so no viewport maths.
+    host.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: 'auto' });
+    $('pageNum').value = String(page);
+  }
+
+  /** Which source page is at the top of a scrolling pane? */
+  function pageAtTop(pane) {
+    var nodes = pane.querySelectorAll('[data-page]');
+    var paneTop = pane.getBoundingClientRect().top;
+    var best = null;
+    for (var i = 0; i < nodes.length; i++) {
+      var r = nodes[i].getBoundingClientRect();
+      if (r.bottom < paneTop) { best = nodes[i]; continue; }
+      if (r.top <= paneTop + 80) best = nodes[i];
+      else break;
+    }
+    return best ? Number(best.getAttribute('data-page')) : null;
   }
 
   var pagerTimer = null;

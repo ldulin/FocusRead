@@ -22,6 +22,7 @@
   <div class="modes" id="modes" hidden>
     <button data-mode="reflow" class="on" title="Clean, reflowed text - full reading features">Reading view</button>
     <button data-mode="original" title="The original page images">Original layout</button>
+    <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
   </div>
 
   <div class="pager" id="pager" hidden>
@@ -36,6 +37,9 @@
 </header>
 
 <main id="stage">
+  <div id="splitBar" class="splitBar" hidden>
+    <label><input type="checkbox" id="syncScroll" checked> Keep the page image in step</label>
+  </div>
   <section id="drop" class="drop">
     <div class="dropInner">
       <h1>Open a paper</h1>

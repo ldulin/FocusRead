@@ -97,8 +97,7 @@
       self.applyVisuals();
 
       FR.speech.getVoices().then(function (voices) {
-        var list = s.localVoicesOnly ? voices.filter(function (v) { return v.localService; }) : voices;
-        self.ui.setVoices(list.length ? list : voices, s.voiceURI);
+        self.ui.setVoices(FR.speech.curateVoices(voices, s.voiceFilter), s.voiceURI);
       });
 
       self.engine.on('progress', function (p) {
@@ -375,6 +374,22 @@
       cache: s.cacheTranslations
     };
 
+    var relay = function () {
+      return new Promise(function (resolve) {
+        chrome.runtime.sendMessage({ type: 'FR_TRANSLATE', texts: texts, opts: opts }, function (resp) {
+          if (chrome.runtime.lastError || !resp) {
+            return resolve(texts.map(function () {
+              return {
+                ok: false, code: 'relay',
+                error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'No response from FocusRead background'
+              };
+            }));
+          }
+          resolve(resp.results || []);
+        });
+      });
+    };
+
     if (s.provider === 'builtin') {
       if (!FR.translate.builtinAvailable()) {
         return Promise.resolve(texts.map(function () {
@@ -386,6 +401,22 @@
       }
       opts.onProgress = onProgress;
       return FR.translate.translateBatch(texts, opts);
+    }
+
+    // "auto" is split across two contexts: only a page can reach Chrome's
+    // built-in translator, only the worker can reach the network without the
+    // page's CORS rules. Ask here whether the built-in one is actually ready;
+    // if it is not, hand the whole thing to the worker, which will skip it.
+    if (s.provider === 'auto') {
+      opts.onProgress = onProgress;
+      return FR.translate.builtinUsable(opts.sourceLang === 'auto' ? 'en' : opts.sourceLang, opts.targetLang)
+        .then(function (ok) {
+          if (!ok) return relay();
+          return FR.translate.translateBatch(texts, opts).then(function (results) {
+            var allBad = results.length && results.every(function (r) { return r && !r.ok; });
+            return allBad ? relay() : results;
+          });
+        });
     }
 
     return new Promise(function (resolve) {

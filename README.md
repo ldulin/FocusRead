@@ -37,8 +37,12 @@ spacing, line width, and a warm-paper or dark background.
 Drop a `.pdf` or `.docx` into the reader. PDFs get rebuilt into clean prose -
 two-column layouts are un-interleaved, running heads and page numbers are
 dropped, and words hyphenated across a line break are put back together. All
-the reading and translation features work there too. `Original layout` shows the
-real pages when you need to see a figure.
+the reading and translation features work there too.
+
+Three views: **Reading view** (clean text), **Original layout** (the real
+pages), and **Side by side** - the page image on the left, the reflowed text on
+the right, each scrolling on its own, with the image following along as you
+read. That last one is the one to use for a paper full of figures.
 
 ---
 
@@ -98,7 +102,9 @@ Set this in Settings → Translation. Default is Chrome's built-in engine.
 
 | Engine | Key needed | Cost | Notes |
 | --- | --- | --- | --- |
-| **Chrome built-in** | no | free | Runs on your machine. Nothing is sent anywhere. Needs Chrome 138+ on desktop and downloads a language pack once, from the popup. |
+| **Automatic** *(default)* | no | free | Tries the built-in translator, then Google, then MyMemory. Nothing to configure. |
+| **Google Translate** | no | free | The keyless endpoint the Google Translate widget itself uses. Good quality, no setup - but undocumented, so it can change without notice. |
+| **Chrome built-in** | no | free | Runs on your machine. Nothing is sent anywhere. Needs Chrome 138+ on desktop and downloads a language pack once, from the popup. On many machines its availability check never answers, which is why Automatic does not wait for it. |
 | **MyMemory** | no | free | ~5,000 characters/day per IP. Adding your own email in Settings raises it to ~50,000. |
 | **LibreTranslate** | optional | free if self-hosted | Point it at your own server. Public mirrors rate-limit anonymous use heavily. |
 | **Google Cloud Translation** | yes | 500k chars/month free | Your own key, stored only on this machine. |
@@ -155,6 +161,12 @@ Worth knowing before you rely on it:
 - **Word-level highlighting depends on the voice.** Network voices often report
   nothing, so on-device voices are preferred. If the highlight runs one word
   ahead of the audio, there's a setting for that.
+- **macOS only ships basic voices.** Of the ~180 voices it exposes, most of the
+  American English ones are novelty sound effects (Bells, Boing, Zarvox);
+  FocusRead hides those and ranks the rest, but the genuinely natural voices are
+  an optional download. System Settings -> Accessibility -> Spoken Content ->
+  the (i) next to System Voice -> pick an English (US) voice marked **Premium**
+  or **Enhanced** (Ava, Allison, Zoe, Tom). Restart Chrome afterwards.
 
 ---
 

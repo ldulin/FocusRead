@@ -31,6 +31,7 @@
     pauseBetween: 0,              // ms of silence between sentences
     maxUtteranceChars: 200,       // Chrome truncates longer utterances
     localVoicesOnly: true,        // remote voices rarely emit word boundaries
+    voiceFilter: 'en-US',         // 'en-US' | 'english' | 'all'
 
     /* --- focus aids --- */
     focusMode: 'spotlight',       // 'off' | 'spotlight' | 'ruler'
@@ -52,7 +53,7 @@
     /* --- translation --- */
     targetLang: 'zh-Hans',
     sourceLang: 'auto',
-    provider: 'builtin',          // builtin|mymemory|libre|google|openai
+    provider: 'auto',             // auto|builtin|google-free|mymemory|libre|google|openai
     bilingual: false,             // show a translation under every sentence
     bilingualScale: 0.92,         // relative font size of the translation line
     translateOnSelect: true,      // popup when you select text

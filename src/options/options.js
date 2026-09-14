@@ -51,8 +51,11 @@
       groups: [{
         title: 'Speech',
         fields: [
+          { key: 'voiceFilter', type: 'select', label: 'Which voices to offer',
+            options: [['en-US', 'American English only'], ['english', 'All English'], ['all', 'Every installed voice']],
+            hint: 'macOS installs around 180 voices, most of them novelty sound effects. FocusRead hides those and puts the natural-sounding ones first.' },
           { key: 'voiceURI', type: 'voice', label: 'Voice' },
-          { key: 'localVoicesOnly', type: 'checkbox', label: 'Offer on-device voices only',
+          { key: 'localVoicesOnly', type: 'checkbox', label: 'Prefer on-device voices',
             hint: 'Network voices are the usual cause of speech cutting out, and most of them cannot report which word is being spoken.' },
           { key: 'rate', type: 'range', label: 'Speed', min: 0.5, max: 2, step: 0.05, unit: 'x',
             hint: 'Chrome can go silent above 2x with a network voice, so the range stops there.' },
@@ -61,6 +64,13 @@
           { key: 'maxUtteranceChars', type: 'number', label: 'Split speech every', min: 80, max: 400, step: 10,
             hint: 'Characters. Chrome truncates long utterances, so sentences are spoken in pieces. Lower this if speech cuts off.' }
         ]
+      }, {
+        title: 'Getting a better voice',
+        note: 'If the voices here sound robotic, it is because macOS only ships the basic ones by default. ' +
+              'Open System Settings, go to Accessibility, then Spoken Content, click the (i) next to System Voice, ' +
+              'and download an English (US) voice marked Premium or Enhanced - Ava, Allison, Zoe and Tom are the ' +
+              'natural-sounding ones. Restart Chrome afterwards and they appear in the list above.',
+        fields: []
       }, {
         title: 'Word highlighting',
         fields: [
@@ -129,13 +139,15 @@
         fields: [
           { key: 'provider', type: 'select', label: 'Translation engine',
             options: [
+              ['auto', 'Automatic (recommended)'],
+              ['google-free', 'Google Translate (free, no key)'],
               ['builtin', 'Chrome built-in (free, on-device)'],
               ['mymemory', 'MyMemory (free, no key)'],
               ['libre', 'LibreTranslate (your own server)'],
               ['google', 'Google Cloud Translation (your key)'],
               ['openai', 'OpenAI-compatible endpoint (your key)']
             ],
-            hint: 'Chrome built-in needs Chrome 138 or newer on desktop and downloads a language pack once. MyMemory is the keyless fallback and allows about 5,000 characters a day per IP address.' },
+            hint: 'Automatic tries Chrome\'s on-device translator first, and falls back to Google and then MyMemory if it is not ready - on many machines it never becomes ready, which is why this is the default. Google Translate here is the keyless endpoint the Google Translate widget itself uses: no setup, good quality, but undocumented, so it can change without notice.' },
           { key: 'providerConfig.mymemory.email', type: 'text', label: 'Your email for MyMemory',
             hint: 'Optional. Supplying your own address raises the free daily allowance to about 50,000 characters. It is sent to MyMemory with each request and stored only on this machine.',
             showIf: function (s) { return s.provider === 'mymemory'; } },
@@ -463,11 +475,8 @@
   }
 
   function voiceOptions() {
-    var list = settings.localVoicesOnly
-      ? voices.filter(function (v) { return v.localService; })
-      : voices;
-    if (!list.length) list = voices;
-    return [['', 'Browser default']].concat(list.map(function (v) {
+    var list = FR.speech.curateVoices(voices, settings.voiceFilter);
+    return [['', 'Best available']].concat(list.map(function (v) {
       return [v.voiceURI, v.name.replace(/\s*\(.*?\)\s*$/, '') + ' - ' + v.lang + (v.localService ? '' : ' (network)')];
     }));
   }

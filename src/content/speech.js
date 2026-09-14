@@ -64,6 +64,81 @@
 
   function baseLang(tag) { return String(tag || '').toLowerCase().split(/[-_]/)[0]; }
 
+  /* ------------------------------------------------------------------ *
+   * Voice curation
+   *
+   * macOS exposes ~180 voices to the web, and the en-US list is mostly
+   * unusable for reading a paper: joke voices that sing or buzz ("Bells",
+   * "Boing", "Zarvox", "Bubbles"), and the 1990s-era voices that sound
+   * robotic ("Fred", "Ralph", "Albert"). Chrome's own default is often one of
+   * the flat network voices. Left unfiltered, the picker is a wall of noise
+   * and whatever the reader lands on tends to sound synthetic.
+   * ------------------------------------------------------------------ */
+
+  // Sound effects, not narrators. Never offered.
+  var NOVELTY = [
+    'albert', 'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos',
+    'deranged', 'good news', 'hysterical', 'jester', 'organ', 'pipe organ',
+    'superstar', 'trinoids', 'whisper', 'wobble', 'zarvox', 'bells',
+    'grandma', 'grandpa', 'rocko', 'shelley', 'sandy', 'flo', 'eddy', 'reed'
+  ];
+
+  // Real voices, but the old low-quality generation. Offered last.
+  var LEGACY = ['fred', 'junior', 'kathy', 'ralph', 'agnes', 'vicki', 'victoria', 'princess', 'bruce'];
+
+  // The natural-sounding ones, best first. Most are optional downloads.
+  var PREFERRED = [
+    'ava', 'allison', 'samantha', 'susan', 'zoe', 'joelle', 'nicky',
+    'tom', 'aaron', 'evan', 'nathan', 'noelle', 'alex'
+  ];
+
+  function bareName(v) {
+    // "Eddy (English (United States))" -> "eddy"
+    return String(v.name || '').replace(/\s*\(.*$/, '').trim().toLowerCase();
+  }
+
+  function voiceRank(v) {
+    var n = bareName(v);
+    var pref = PREFERRED.indexOf(n);
+    if (pref !== -1) return pref;                    // 0..12, best first
+    if (LEGACY.indexOf(n) !== -1) return 900;
+    if (!v.localService) return 500;                 // network voices: usable, but laggy
+    return 100;
+  }
+
+  /**
+   * @param {Array} voices
+   * @param {'en-US'|'english'|'all'} filter
+   * @returns {Array} ranked, with the unusable ones removed
+   */
+  function curateVoices(voices, filter) {
+    var list = (voices || []).filter(function (v) {
+      if (NOVELTY.indexOf(bareName(v)) !== -1) return false;
+      if (filter === 'all') return true;
+      var lang = String(v.lang || '').toLowerCase();
+      if (filter === 'english') return lang.indexOf('en') === 0;
+      return lang === 'en-us' || lang === 'en_us';
+    });
+
+    // If a strict filter leaves nothing, widen rather than show an empty list.
+    if (!list.length && filter === 'en-US') return curateVoices(voices, 'english');
+    if (!list.length && filter === 'english') return curateVoices(voices, 'all');
+
+    return list.sort(function (a, b) {
+      var d = voiceRank(a) - voiceRank(b);
+      if (d) return d;
+      return String(a.name).localeCompare(String(b.name));
+    });
+  }
+
+  /** True when nothing better than the old robotic voices is installed. */
+  function onlyLegacyVoices(voices, filter) {
+    var list = curateVoices(voices, filter || 'en-US');
+    if (!list.length) return true;
+    return list.every(function (v) { return voiceRank(v) >= 500; });
+  }
+
+
   /**
    * Pick a voice. A pinned voiceURI always wins. Otherwise: best language
    * match, preferring on-device voices, which start instantly, work offline,
@@ -82,11 +157,13 @@
     if (!pool.length) return null;
 
     var local = pool.filter(function (v) { return v.localService; });
-    if (localOnly && local.length) pool = local;
-    else if (local.length) pool = local;
+    if (local.length) pool = local;
 
-    var dflt = pool.filter(function (v) { return v.default; });
-    return dflt[0] || pool[0];
+    // Rank rather than take the browser default: on macOS the default for
+    // en-US is frequently one of the flat legacy voices.
+    var ranked = pool.slice().sort(function (a, b) { return voiceRank(a) - voiceRank(b); });
+    var usable = ranked.filter(function (v) { return NOVELTY.indexOf(bareName(v)) === -1; });
+    return usable[0] || ranked[0] || pool[0];
   }
 
   /* ------------------------------------------------------------------ *
@@ -404,6 +481,8 @@
     state: state,
     getVoices: getVoices,
     pickVoice: pickVoice,
+    curateVoices: curateVoices,
+    onlyLegacyVoices: onlyLegacyVoices,
     splitForSpeech: splitForSpeech,
     supported: !!synth,
     RATE_MIN: RATE_MIN,

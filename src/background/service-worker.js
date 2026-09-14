@@ -254,6 +254,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
 
   if (msg.type === 'FR_TRANSLATE') {
     var opts = msg.opts || {};
+    // The page has already decided the built-in engine is unusable (or is not
+    // a page at all), so auto here means "network engines only".
+    if (opts.provider === 'auto') opts = Object.assign({}, opts, { provider: 'auto', noBuiltin: true });
     if (opts.provider === 'builtin') {
       // Cannot run here - no Document, so self.Translator does not exist.
       respond({
