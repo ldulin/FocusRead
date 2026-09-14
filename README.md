@@ -52,8 +52,8 @@ sentence.** That view is the one to use for a paper full of figures.
 It isn't on the Chrome Web Store. Load it yourself:
 
 ```bash
-git clone <your-fork-url> focus-read
-cd focus-read
+git clone https://github.com/ldulin/FocusRead.git
+cd FocusRead
 ./scripts/fetch-vendor.sh
 ```
 
