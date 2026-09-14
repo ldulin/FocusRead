@@ -72,6 +72,31 @@
    * Block discovery
    * ------------------------------------------------------------------ */
 
+  /**
+   * Is this element actually painted?
+   *
+   * getClientRects() alone is not the test: an element with
+   * `display: contents` generates no box of its own, so it reports no rects
+   * even though its text is perfectly visible. The PDF reader wraps text-layer
+   * spans in exactly such a container, and rejecting those left the page-image
+   * view with no sentences at all.
+   */
+  function isRendered(el) {
+    if (!el) return false;
+    try {
+      if (el.getClientRects().length) return true;
+      var display;
+      try { display = getComputedStyle(el).display; } catch (e) { return false; }
+      if (display !== 'contents') return false;
+      for (var kid = el.firstElementChild; kid; kid = kid.nextElementSibling) {
+        if (kid.getClientRects && kid.getClientRects().length) return true;
+      }
+      return false;
+    } catch (e) {
+      return false;            // detached mid-scan
+    }
+  }
+
   function Engine(rootEl, opts) {
     this.root = rootEl || document.body;
     this.opts = Object.assign({
@@ -173,9 +198,7 @@
 
     var kept = blocks.filter(function (b) {
       if (b.text.trim().length < self.opts.minBlockChars) return false;
-      // Skip anything not actually painted (collapsed menus, hidden tabs).
-      try { if (!b.el.getClientRects().length) return false; } catch (e) { /* detached */ }
-      return true;
+      return isRendered(b.el);
     });
 
     // A run interrupted only by runs we then DISCARDED was never really
@@ -777,5 +800,5 @@
   Engine.prototype.isAttached = function () { return this._attached; };
 
   FR.Engine = Engine;
-  FR.engineUtils = { normalize: normalize, isSkipped: isSkipped, unwrapAll: unwrapAll, scrollParent: scrollParent };
+  FR.engineUtils = { normalize: normalize, isSkipped: isSkipped, unwrapAll: unwrapAll, scrollParent: scrollParent, isRendered: isRendered };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

@@ -188,8 +188,12 @@
         title: 'PDF and Word',
         fields: [
           { key: 'pdfView', type: 'select', label: 'Default PDF view',
-            options: [['reflow', 'Reading view (clean text)'], ['original', 'Original layout']],
-            hint: 'Reading view rebuilds paragraphs from the PDF and supports every feature. Original layout shows the real pages, but there is no room for inline translation.' },
+            options: [
+              ['split', 'Side by side'],
+              ['reflow', 'Reading view (clean text)'],
+              ['original', 'Original layout']
+            ],
+            hint: 'Side by side shows the real page on the left and the reflowed text on the right, and clicking a line on the page jumps the reading pane to that sentence. Reading view is the text alone. Original layout is the pages alone, where there is no room for inline translation.' },
           { key: 'stripRunningHeads', type: 'checkbox', label: 'Drop repeated headers and page numbers',
             hint: 'Stops the journal name being read aloud in the middle of a paragraph.' },
           { key: 'joinHyphens', type: 'checkbox', label: 'Rejoin words split across lines',

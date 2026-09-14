@@ -808,7 +808,7 @@
     wire();
     FR.settings.get().then(function (s) {
       state.settings = s;
-      state.mode = s.pdfView === 'original' ? 'original' : 'reflow';
+      state.mode = (s.pdfView === 'original' || s.pdfView === 'split') ? s.pdfView : 'reflow';
       return sourceFromLocation().then(function (src) {
         if (!src) return;
         if (src.trusted) loadFromUrl(src.url, true);

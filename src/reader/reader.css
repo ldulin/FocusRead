@@ -196,26 +196,65 @@ button.primary:hover { filter: brightness(1.08); }
   overflow: hidden;
 }
 .pageWrap canvas { display: block; }
-/* pdf.js positions these spans against the canvas; they must stay transparent
-   and selectable, which is what makes click-to-read work over a page image. */
+/* pdf.js text layer.
+   
+   These rules are pdf.js's own, restated rather than pulled in from its
+   pdf_viewer.css. That file is 160 KB of whole-viewer styling (toolbar,
+   sidebar, annotation editor) and would leak into this page; only the text
+   layer matters here.
+   
+   The scaling is load-bearing and easy to miss: pdf.js sets --font-height,
+   --scale-x and --rotate as inline custom properties on every span and relies
+   on a STYLESHEET to turn them into font-size and a transform. Without that,
+   the spans render at the inherited size with no horizontal stretch, so the
+   text layer does not line up with the canvas at all - and every highlight
+   drawn on it is the wrong size and in the wrong place.
+   
+   One deliberate change: pdf.js selects with `> :not(.markedContent)`, a
+   direct-child selector. We wrap spans in paragraph containers so the reader
+   can read a sentence across line breaks, which would break that. The
+   selector here is a descendant one so it survives the wrapper. */
 .textLayer {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  overflow: clip;
   opacity: 1;
-  line-height: 1;
   text-align: initial;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: transparent;
+  z-index: 0;
+
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
 }
-.textLayer span, .textLayer br {
+
+.textLayer :is(span, br) {
   color: transparent;
   position: absolute;
   white-space: pre;
   cursor: text;
-  transform-origin: 0 0;
+  transform-origin: 0% 0%;
+  user-select: text;
 }
+
+.textLayer span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.textLayer .markedContent { display: contents; }
+
 .textLayer ::selection { background: rgba(31, 111, 235, .32); }
 .textLayer fr-s.fr-cur { background: color-mix(in srgb, var(--fr-hl) 45%, transparent); border-radius: 2px; }
 
@@ -327,14 +366,14 @@ body.split fr-s { scroll-margin-bottom: 120px; }
    word look doubled and blot out the line underneath. Everything here is a
    translucent wash, and the text stays invisible. */
 
-.textLayer .fr-para {
-  /* Must stay static: position:absolute would become the containing block for
-     the spans inside and collapse the whole page into the corner. */
-  position: static;
-  display: block;
-  height: 0;
-  line-height: 0;
-}
+/* display:contents, so the wrapper generates no box whatsoever - exactly what
+   pdf.js does for its own .markedContent groups. Anything that produces a box
+   here goes wrong: position:absolute would become the containing block for the
+   spans and collapse the page into the corner, and a line-height (set to keep
+   the joining spaces from taking up room) inherits into the spans, flattens
+   their line boxes and leaves every highlight painted several pixels off the
+   glyphs beneath. */
+.textLayer .fr-para { display: contents; }
 
 .textLayer fr-s,
 .textLayer fr-b {
