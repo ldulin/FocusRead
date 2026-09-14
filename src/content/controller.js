@@ -99,7 +99,7 @@
       self.applyVisuals();
 
       FR.speech.getVoices().then(function (voices) {
-        self.ui.setVoices(FR.speech.curateVoices(voices, s.voiceFilter), s.voiceURI);
+        self.ui.setVoices(FR.speech.voiceGroups(voices, s.voiceFilter), s.voiceURI);
       });
 
       self.engine.on('progress', function (p) {

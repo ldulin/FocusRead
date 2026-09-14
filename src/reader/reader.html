@@ -25,6 +25,13 @@
     <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
   </div>
 
+  <div class="zoom" id="zoom" hidden>
+    <button id="zoomOut" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+    <button id="zoomFit" title="Fit the page to the window">Fit</button>
+    <output id="zoomLevel" aria-live="polite">100%</output>
+    <button id="zoomIn" title="Zoom in" aria-label="Zoom in">&#43;</button>
+  </div>
+
   <div class="pager" id="pager" hidden>
     <button id="pagePrev" title="Previous page">&#8249;</button>
     <input id="pageNum" type="number" min="1" value="1" aria-label="Page number">

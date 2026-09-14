@@ -53,7 +53,7 @@
         fields: [
           { key: 'voiceFilter', type: 'select', label: 'Which voices to offer',
             options: [['en-US', 'American English only'], ['english', 'All English'], ['all', 'Every installed voice']],
-            hint: 'macOS installs around 180 voices, most of them novelty sound effects. FocusRead hides those and puts the natural-sounding ones first.' },
+            hint: 'Only the voices that can actually read prose are listed, grouped clearest-first; the singing and buzzing ones macOS ships are left out. Widen this if the list looks short. On a phone the browser usually offers better voices than desktop Chrome does.' },
           { key: 'voiceURI', type: 'voice', label: 'Voice' },
           { key: 'localVoicesOnly', type: 'checkbox', label: 'Prefer on-device voices',
             hint: 'Network voices are the usual cause of speech cutting out, and most of them cannot report which word is being spoken.' },
@@ -349,6 +349,19 @@
       var opts = f.type === 'voice' ? voiceOptions()
                                     : (typeof f.options === 'function' ? f.options() : f.options);
       opts.forEach(function (o) {
+        // A group, or a plain [value, label] pair.
+        if (o && o.group) {
+          var grp = document.createElement('optgroup');
+          grp.label = o.group;
+          o.options.forEach(function (pair) {
+            var child = document.createElement('option');
+            child.value = pair[0];
+            child.textContent = pair[1];
+            grp.appendChild(child);
+          });
+          sel.appendChild(grp);
+          return;
+        }
         var opt = document.createElement('option');
         opt.value = o[0];
         opt.textContent = o[1];
@@ -479,11 +492,18 @@
     return t;
   }
 
+  /** Grouped: [['', label], {group, options: [[value,label],...]}, ...] */
   function voiceOptions() {
-    var list = FR.speech.curateVoices(voices, settings.voiceFilter);
-    return [['', 'Best available']].concat(list.map(function (v) {
-      return [v.voiceURI, v.name.replace(/\s*\(.*?\)\s*$/, '') + ' - ' + v.lang + (v.localService ? '' : ' (network)')];
-    }));
+    var out = [['', 'Best available']];
+    FR.speech.voiceGroups(voices, settings.voiceFilter).forEach(function (g) {
+      out.push({
+        group: g.label,
+        options: g.voices.map(function (v) {
+          return [v.voiceURI, v.name.replace(/\s*\(.*?\)\s*$/, '') + ' - ' + v.lang];
+        })
+      });
+    });
+    return out;
   }
 
   function render() {

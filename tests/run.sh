@@ -28,6 +28,12 @@ run_suite "Sentence segmentation" "FR.tests.run()" \
   "$root/src/lib/segmenter.js" \
   "$here/segmenter.cases.js"
 
+run_suite "Voice curation" "FR.voiceTests.run()" \
+  "$here/jsc-stubs.js" \
+  "$root/src/lib/segmenter.js" \
+  "$root/src/content/speech.js" \
+  "$here/voice.cases.js"
+
 run_suite "Service worker decisions" "FR.swTests.run()" \
   "$here/sw-stub.js" \
   "$root/src/lib/segmenter.js" \

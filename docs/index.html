@@ -6,21 +6,21 @@
 <title>FocusRead - read papers aloud, sentence by sentence</title>
 <meta name="description" content="Open a PDF or Word file and read it sentence by sentence: tap to hear it, dim the rest to stay focused, translate a word or the whole page. Works on your phone.">
 <meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="reader/reader.css">
-<link rel="stylesheet" href="content/content.css">
+<link rel="stylesheet" href="reader/reader.css?v=89f57ecd1a">
+<link rel="stylesheet" href="content/content.css?v=3a7c868122">
 <link rel="icon" href="icons/icon32.png">
 <link rel="apple-touch-icon" href="icons/icon128.png">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1b1d21">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="FocusRead">
-<link rel="stylesheet" href="mobile.css">
+<link rel="stylesheet" href="mobile.css?v=c26ae67117">
 </head>
 <body>
 
 <header class="bar fr-ignore">
   <div class="brand">
-    <img src="icons/icon32.png" alt="" width="20" height="20">
+    <img src="icons/icon32.png?v=8366bccb68" alt="" width="20" height="20">
     <span>FocusRead</span>
   </div>
 
@@ -32,6 +32,13 @@
     <button data-mode="reflow" class="on" title="Clean, reflowed text - full reading features">Reading view</button>
     <button data-mode="original" title="The original page images">Original layout</button>
     <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
+  </div>
+
+  <div class="zoom" id="zoom" hidden>
+    <button id="zoomOut" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+    <button id="zoomFit" title="Fit the page to the window">Fit</button>
+    <output id="zoomLevel" aria-live="polite">100%</output>
+    <button id="zoomIn" title="Zoom in" aria-label="Zoom in">&#43;</button>
   </div>
 
   <div class="pager" id="pager" hidden>
@@ -89,17 +96,17 @@
 
 <div id="dragveil" class="dragveil" hidden><span>Drop to open</span></div>
 
-<script src="shim.js"></script>
-<script src="lib/segmenter.js"></script>
-<script src="lib/settings.js"></script>
-<script src="lib/translate.js"></script>
-<script src="content/speech.js"></script>
-<script src="content/engine.js"></script>
-<script src="content/ui.js"></script>
-<script src="content/controller.js"></script>
-<script src="reader/docx.js"></script>
-<script src="reader/pdf.js"></script>
-<script src="reader/reader.js"></script>
+<script src="shim.js?v=b73525ec9b"></script>
+<script src="lib/segmenter.js?v=6d8949c9b0"></script>
+<script src="lib/settings.js?v=2c8e9d825e"></script>
+<script src="lib/translate.js?v=6bf182eff1"></script>
+<script src="content/speech.js?v=7b047ae663"></script>
+<script src="content/engine.js?v=3cc6f9e661"></script>
+<script src="content/ui.js?v=d910c37dbc"></script>
+<script src="content/controller.js?v=99a7256730"></script>
+<script src="reader/docx.js?v=74d6971811"></script>
+<script src="reader/pdf.js?v=ee58d305e7"></script>
+<script src="reader/reader.js?v=2e2a7133ed"></script>
 <script>
 (function () {
   var note = document.querySelector('.webnote');

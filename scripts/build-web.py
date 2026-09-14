@@ -16,6 +16,7 @@ handled here rather than by forking the source:
 Run it after changing anything under src/ or web/, and commit docs/.
 GitHub Pages then serves main /docs with no build machinery of its own.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -35,6 +36,11 @@ EXTRA = ['web/shim.js', 'web/mobile.css']
 ASSET_RE = re.compile(r'(<(?:script|link|img)\b[^>]*?(?:src|href)=")([^"]+)(")')
 
 
+def stamp_of(src_rel):
+    with open(os.path.join(ROOT, src_rel), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()[:10]
+
+
 def published_path(src_rel):
     """src/content/engine.js -> content/engine.js ; icons/x.png -> icons/x.png"""
     if src_rel.startswith('src/'):
@@ -43,13 +49,24 @@ def published_path(src_rel):
 
 
 def copy_asset(src_rel):
+    """Copy an asset and return its published path with a content stamp.
+
+    The stamp matters on a deployed site, not just while developing: GitHub
+    Pages serves assets with a cache lifetime, so without it a returning
+    visitor keeps running the previous build's JavaScript against the new
+    HTML - which is exactly the kind of mismatch that is impossible to
+    diagnose from a bug report.
+    """
     src = os.path.join(ROOT, src_rel)
     if not os.path.exists(src):
         raise SystemExit('missing asset referenced by a page: ' + src_rel)
-    dst = os.path.join(OUT, published_path(src_rel))
+    rel = published_path(src_rel)
+    dst = os.path.join(OUT, rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(src, dst)
-    return published_path(src_rel)
+    with open(src, 'rb') as f:
+        stamp = hashlib.sha256(f.read()).hexdigest()[:10]
+    return rel, rel + '?v=' + stamp
 
 
 MANIFEST = """{
@@ -104,17 +121,21 @@ def build_page(src_rel, out_name):
             return m.group(0)
         bare = url.split('?')[0]
         resolved = os.path.normpath(os.path.join(src_dir, bare))
-        new = copy_asset(resolved)
-        copied.append(new)
-        return pre + new + post
+        rel, stamped = copy_asset(resolved)
+        copied.append(rel)
+        return pre + stamped + post
 
     html = ASSET_RE.sub(fix, html)
 
     # The shim must run before anything that touches chrome.*
-    html = html.replace('<script src=', '<script src="shim.js"></script>\n<script src=', 1)
+    html = html.replace('<script src=',
+                        '<script src="shim.js?v=%s"></script>\n<script src=' % stamp_of('web/shim.js'), 1)
 
     # Mobile styling last, so it can override the shared sheets.
-    html = html.replace('</head>', HEAD_EXTRAS + '<link rel="stylesheet" href="mobile.css">\n</head>', 1)
+    html = html.replace('</head>',
+                        HEAD_EXTRAS +
+                        '<link rel="stylesheet" href="mobile.css?v=%s">\n</head>' % stamp_of('web/mobile.css'),
+                        1)
 
     if out_name == 'index.html':
         html = html.replace('<section id="drop"', WEB_NOTE + '\n  <section id="drop"', 1)

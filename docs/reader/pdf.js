@@ -406,11 +406,37 @@
     return edges;
   }
 
+  /** Does a finished sentence end inside this line (not just at its end)? */
+  function hasInnerTerminator(text) {
+    var t = String(text || '');
+    var masked = t;
+    if (FR.segmenter && FR.segmenter.mask) {
+      try { masked = FR.segmenter.mask(t); } catch (e) { /* use the raw text */ }
+    }
+    return /[.!?]\s+\S/.test(masked);
+  }
+
   function isHeadingLine(ln, bodyHeight) {
     var t = ln.text.trim();
     if (t.length > 90 || t.length < 3) return false;
     if (ln.h > bodyHeight * 1.18) return true;
-    if (/^\d+(\.\d+)*\.?\s+\S/.test(t) && t.length < 70 && !/[.;]$/.test(t)) return true;
+
+    // A numbered heading: "3. Results", "3.1 Data analysis", "1 Introduction".
+    //
+    // The capital is load-bearing. Without it the same pattern matches a line
+    // that merely BEGINS with a decimal measurement - "6.5 min. The dataset is
+    // open access. We" - which was then treated as a heading, forcing a
+    // paragraph break either side of it. That stranded "Each run took" and
+    // "6.5 min." as separate reading units: the line-by-line reading that kept
+    // being reported.
+    //
+    // The terminator test is the second guard: a heading does not contain a
+    // finished sentence. It runs on the masked text so "Fig. 3" and "et al."
+    // do not count as one.
+    if (/^\d+(\.\d+)*\.?\s+[A-Z]/.test(t) &&
+        t.length < 70 &&
+        !/[.;]$/.test(t) &&
+        !hasInnerTerminator(t)) return true;
     var WORDS = ['abstract', 'introduction', 'background', 'methods', 'materials and methods',
       'results', 'discussion', 'conclusion', 'conclusions', 'references', 'acknowledgements',
       'acknowledgments', 'related work', 'limitations', 'supplementary information', 'data availability'];
@@ -922,6 +948,7 @@
       findRunningHeads: findRunningHeads,
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
+      hasInnerTerminator: hasInnerTerminator,
       columnEdges: columnEdges,
       alignSpans: alignSpans,
       endsSentence: endsSentence,

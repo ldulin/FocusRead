@@ -286,6 +286,43 @@
       eq('a finished sentence is not merged with what follows', finished.length, 2);
     })();
 
+    /* ---- a line starting with a decimal is not a numbered heading ---- */
+    (function () {
+      function ln(t) { return { text: t, h: 10, left: 56, right: 280, y: 700, col: 0 }; }
+
+      // The exact line that caused line-by-line reading: "6.5" matched the
+      // same ^\d+(\.\d+)* pattern as "3.1 Methods".
+      eq('a decimal measurement is not a heading',
+         P.isHeadingLine(ln('6.5 min. The dataset is open access. We'), 10), false);
+      eq('nor is a p-value line',
+         P.isHeadingLine(ln('0.05 was the threshold we adopted throughout'), 10), false);
+      eq('nor a bare measurement mid-paragraph',
+         P.isHeadingLine(ln('22.4 yrs on average across the three cohorts'), 10), false);
+
+      // Real numbered headings must still be recognised.
+      eq('"1 Introduction" is a heading', P.isHeadingLine(ln('1 Introduction'), 10), true);
+      eq('"3. Results" is a heading', P.isHeadingLine(ln('3. Results'), 10), true);
+      eq('"3.1 Data analysis" is a heading', P.isHeadingLine(ln('3.1 Data analysis'), 10), true);
+      eq('a named section is still a heading', P.isHeadingLine(ln('Discussion'), 10), true);
+
+      eq('a complete sentence is never a heading',
+         P.hasInnerTerminator('6.5 min. The dataset is open access.'), true);
+      eq('an abbreviation is not an inner terminator',
+         P.hasInnerTerminator('See Fig. 3 for the distribution'), false);
+
+      // End to end: the three lines that were being split apart.
+      var lines = [
+        { text: 'Participants (N = 24, mean age 22.4 yrs)', y: 700, left: 56, right: 262, h: 10, col: 0 },
+        { text: 'completed 3 runs of the task. Each run took', y: 687, left: 56, right: 277, h: 10, col: 0 },
+        { text: '6.5 min. The dataset is open access. We', y: 674, left: 56, right: 263, h: 10, col: 0 },
+        { text: 'used a Butterworth filter, i.e. a maximally', y: 661, left: 56, right: 275, h: 10, col: 0 }
+      ];
+      var blocks = P.linesToBlocks(lines, 10, true);
+      eq('the four lines stay one paragraph', blocks.length, 1);
+      eq('so the sentence is whole',
+         blocks[0].text.indexOf('Each run took 6.5 min.') !== -1, true);
+    })();
+
     /* ---- a trailing abbreviation is not a paragraph end ---- */
     (function () {
       eq('a real sentence end is recognised', P.endsSentence('observed in these data.'), true);

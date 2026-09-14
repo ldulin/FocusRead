@@ -70,6 +70,7 @@
 
     /* --- document reader (PDF / DOCX) --- */
     pdfView: 'split',             // 'split' | 'reflow' (clean text) | 'original' (pages)
+    pdfZoom: 1,                   // 1 = fit the page to its pane
     pdfInterceptLinks: false,     // open .pdf links in FocusRead instead of Chrome's viewer
     stripRunningHeads: true,      // drop repeated page headers/footers in reflow mode
     joinHyphens: true             // rejoin words split across line ends

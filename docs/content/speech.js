@@ -75,21 +75,30 @@
    * and whatever the reader lands on tends to sound synthetic.
    * ------------------------------------------------------------------ */
 
-  // Sound effects, not narrators. Never offered.
+  // Sound effects, not narrators: these sing, buzz or whisper and cannot read
+  // a paper. The only tier never offered.
   var NOVELTY = [
     'albert', 'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos',
     'deranged', 'good news', 'hysterical', 'jester', 'organ', 'pipe organ',
-    'superstar', 'trinoids', 'whisper', 'wobble', 'zarvox', 'bells',
-    'grandma', 'grandpa', 'rocko', 'shelley', 'sandy', 'flo', 'eddy', 'reed'
+    'superstar', 'trinoids', 'whisper', 'wobble', 'zarvox'
   ];
 
-  // Real voices, but the old low-quality generation. Offered last.
+  // Apple's character voices. Stylised - Grandma and Grandpa sound elderly,
+  // Rocko and Flo are cartoonish - but they are real, intelligible voices, so
+  // they are offered, after the plainer ones. These were in the novelty list
+  // at first, which cut the American English list from 28 entries to 5 and
+  // left almost nothing to choose between.
+  var STYLISED = ['eddy', 'flo', 'grandma', 'grandpa', 'reed', 'rocko', 'sandy', 'shelley'];
+
+  // The old low-quality generation. Real, and sometimes all that is installed,
+  // but robotic. Offered last.
   var LEGACY = ['fred', 'junior', 'kathy', 'ralph', 'agnes', 'vicki', 'victoria', 'princess', 'bruce'];
 
-  // The natural-sounding ones, best first. Most are optional downloads.
+  // The natural-sounding ones, best first. Most are optional downloads on
+  // macOS; iOS and Android usually ship better defaults than desktop Chrome.
   var PREFERRED = [
     'ava', 'allison', 'samantha', 'susan', 'zoe', 'joelle', 'nicky',
-    'tom', 'aaron', 'evan', 'nathan', 'noelle', 'alex'
+    'tom', 'aaron', 'evan', 'nathan', 'noelle', 'alex', 'siri'
   ];
 
   function bareName(v) {
@@ -97,13 +106,33 @@
     return String(v.name || '').replace(/\s*\(.*$/, '').trim().toLowerCase();
   }
 
-  function voiceRank(v) {
+  /**
+   * Which group a voice belongs in. Doubles as its sort order.
+   * @returns {'natural'|'plain'|'stylised'|'network'|'basic'}
+   */
+  function voiceTier(v) {
     var n = bareName(v);
-    var pref = PREFERRED.indexOf(n);
-    if (pref !== -1) return pref;                    // 0..12, best first
-    if (LEGACY.indexOf(n) !== -1) return 900;
-    if (!v.localService) return 500;                 // network voices: usable, but laggy
-    return 100;
+    if (PREFERRED.indexOf(n) !== -1) return 'natural';
+    if (LEGACY.indexOf(n) !== -1) return 'basic';
+    if (STYLISED.indexOf(n) !== -1) return 'stylised';
+    if (!v.localService) return 'network';
+    return 'plain';
+  }
+
+  var TIER_ORDER = { natural: 0, plain: 1000, stylised: 2000, network: 3000, basic: 4000 };
+
+  var TIER_LABEL = {
+    natural: 'Clearest',
+    plain: 'Other installed voices',
+    stylised: 'Character voices',
+    network: 'Network voices (need a connection)',
+    basic: 'Basic voices (robotic)'
+  };
+
+  function voiceRank(v) {
+    var tier = voiceTier(v);
+    if (tier === 'natural') return PREFERRED.indexOf(bareName(v));   // 0..13
+    return TIER_ORDER[tier];
   }
 
   /**
@@ -129,6 +158,23 @@
       if (d) return d;
       return String(a.name).localeCompare(String(b.name));
     });
+  }
+
+  /**
+   * The curated list split into labelled groups, so offering more voices does
+   * not just mean a longer undifferentiated list.
+   * @returns {Array<{label:string, tier:string, voices:Array}>}
+   */
+  function voiceGroups(voices, filter) {
+    var list = curateVoices(voices, filter);
+    var order = ['natural', 'plain', 'stylised', 'network', 'basic'];
+    var buckets = {};
+    list.forEach(function (v) {
+      var t = voiceTier(v);
+      (buckets[t] = buckets[t] || []).push(v);
+    });
+    return order.filter(function (t) { return buckets[t] && buckets[t].length; })
+      .map(function (t) { return { label: TIER_LABEL[t], tier: t, voices: buckets[t] }; });
   }
 
   /** True when nothing better than the old robotic voices is installed. */
@@ -482,6 +528,8 @@
     getVoices: getVoices,
     pickVoice: pickVoice,
     curateVoices: curateVoices,
+    voiceGroups: voiceGroups,
+    voiceTier: voiceTier,
     onlyLegacyVoices: onlyLegacyVoices,
     splitForSpeech: splitForSpeech,
     supported: !!synth,

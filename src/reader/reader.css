@@ -433,3 +433,38 @@ body.split #pages .textLayer fr-s { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .textLayer .fr-jumped, .textLayer .fr-nomatch { transition: none; }
 }
+
+/* ---------- zoom ---------- */
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-radius: 10px;
+}
+.zoom button {
+  padding: 4px 9px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 30px;
+}
+.zoom #zoomFit { font-size: 12px; padding: 5px 9px; }
+.zoom output {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  min-width: 42px;
+  text-align: center;
+}
+
+/* Zoomed past the pane width, the page needs somewhere to go. */
+.pages { overflow-x: auto; }
+body.split #pages { overflow: auto; }
+.pages.zoomed { align-items: flex-start; }
+
+@media (max-width: 640px) {
+  .zoom { order: 5; }
+  .zoom button { min-height: 36px; min-width: 38px; }
+}

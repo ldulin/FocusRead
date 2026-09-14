@@ -414,14 +414,33 @@
     if (s.hidden !== undefined) q('.bar').toggleAttribute('hidden', !!s.hidden);
   };
 
+  /**
+   * @param {Array|Array<{label,voices}>} voices  a flat list, or groups from
+   *   FR.speech.voiceGroups - grouped is preferred, so a long list stays
+   *   navigable.
+   */
   UI.prototype.setVoices = function (voices, selectedURI) {
     var sel = this.$('[data-role="voice"]');
     if (!sel) return;
-    var opts = ['<option value="">Default voice</option>'];
-    voices.forEach(function (v) {
+
+    var grouped = voices.length && voices[0] && voices[0].voices;
+    var opts = ['<option value="">Best available</option>'];
+
+    function option(v) {
       var label = v.name.replace(/\s*\(.*?\)\s*$/, '') + ' - ' + v.lang;
-      opts.push('<option value="' + escapeAttr(v.voiceURI) + '">' + escapeHtml(label) + '</option>');
-    });
+      return '<option value="' + escapeAttr(v.voiceURI) + '">' + escapeHtml(label) + '</option>';
+    }
+
+    if (grouped) {
+      voices.forEach(function (g) {
+        opts.push('<optgroup label="' + escapeAttr(g.label) + '">');
+        g.voices.forEach(function (v) { opts.push(option(v)); });
+        opts.push('</optgroup>');
+      });
+    } else {
+      voices.forEach(function (v) { opts.push(option(v)); });
+    }
+
     sel.innerHTML = opts.join('');
     sel.value = selectedURI || '';
   };

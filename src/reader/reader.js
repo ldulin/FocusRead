@@ -181,6 +181,7 @@
     $('pager').hidden = true;
     $('notices').hidden = true;
     $('splitBar').hidden = true;
+    $('zoom').hidden = true;
     document.body.classList.remove('split');
   }
 
@@ -391,7 +392,8 @@
     // Size to the CONTAINER, not the window: in split view the pane is roughly
     // half the width, and sizing from the window made every page overflow it.
     var avail = host.clientWidth || (root.innerWidth || 900);
-    var width = Math.max(260, Math.min(900, avail - 34));
+    var fit = Math.max(260, Math.min(900, avail - 34));
+    var width = Math.max(160, fit * zoom());
 
     return doc.getPage(1).then(function (p1) {
       // A reset landing inside this await would null state.doc; use the local.
@@ -439,6 +441,61 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Zoom
+   *
+   * 1 means "fit the page to its pane", which is what the view has always
+   * done; anything else multiplies that. Changing it re-renders, because the
+   * page is a canvas - scaling it with CSS would just blur it, and the text
+   * layer would stop lining up with the glyphs.
+   * ------------------------------------------------------------------ */
+
+  var ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5, 3];
+
+  function zoom() {
+    var z = state.settings ? Number(state.settings.pdfZoom) : 1;
+    return isFinite(z) && z > 0 ? Math.min(3, Math.max(0.5, z)) : 1;
+  }
+
+  function showZoom() {
+    var z = zoom();
+    $('zoomLevel').textContent = Math.round(z * 100) + '%';
+    $('zoomOut').disabled = z <= ZOOM_STEPS[0];
+    $('zoomIn').disabled = z >= ZOOM_STEPS[ZOOM_STEPS.length - 1];
+    $('zoomFit').disabled = z === 1;
+    $('pages').classList.toggle('zoomed', z > 1);
+  }
+
+  function setZoom(z) {
+    z = Math.min(3, Math.max(0.5, z));
+    if (!state.settings) return;
+    if (Math.abs(z - zoom()) < 0.001) return;
+    state.settings.pdfZoom = z;
+    FR.settings.set({ pdfZoom: z });
+    showZoom();
+    // Only the page-image views care.
+    if (state.mode === 'original' || state.mode === 'split') {
+      var keep = $('pages').scrollTop / Math.max(1, $('pages').scrollHeight);
+      setMode(state.mode).then(function () {
+        // Hold roughly the same place in the document across the re-render.
+        $('pages').scrollTop = keep * $('pages').scrollHeight;
+      });
+    }
+  }
+
+  function stepZoom(dir) {
+    var z = zoom();
+    if (dir > 0) {
+      for (var i = 0; i < ZOOM_STEPS.length; i++) {
+        if (ZOOM_STEPS[i] > z + 0.001) return setZoom(ZOOM_STEPS[i]);
+      }
+    } else {
+      for (var j = ZOOM_STEPS.length - 1; j >= 0; j--) {
+        if (ZOOM_STEPS[j] < z - 0.001) return setZoom(ZOOM_STEPS[j]);
+      }
+    }
+  }
+
   function renderOpts() {
     return {
       heads: state.heads || {},
@@ -478,6 +535,8 @@
 
     document.body.classList.toggle('split', mode === 'split');
     $('splitBar').hidden = mode !== 'split';
+    $('zoom').hidden = !(mode === 'original' || mode === 'split');
+    showZoom();
 
     if (mode === 'original') return renderOriginal(gen);
     if (mode === 'split') return renderSplit(gen);
@@ -774,6 +833,19 @@
         setMode(b.getAttribute('data-mode'));
       });
     });
+
+    $('zoomIn').addEventListener('click', function () { stepZoom(1); });
+    $('zoomOut').addEventListener('click', function () { stepZoom(-1); });
+    $('zoomFit').addEventListener('click', function () { setZoom(1); });
+
+    // Ctrl/Cmd + wheel over the pages, the gesture people already expect.
+    // Without the modifier the wheel scrolls, which is also what people expect.
+    $('pages').addEventListener('wheel', function (e) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (state.mode !== 'original' && state.mode !== 'split') return;
+      e.preventDefault();
+      stepZoom(e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
 
     $('pagePrev').addEventListener('click', function () { goToPage(Number($('pageNum').value) - 1); });
     $('pageNext').addEventListener('click', function () { goToPage(Number($('pageNum').value) + 1); });
