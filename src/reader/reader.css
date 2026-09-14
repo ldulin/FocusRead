@@ -469,7 +469,12 @@ body.split #pages .textLayer fr-s { cursor: pointer; }
 /* Zoomed past the pane width, the page needs somewhere to go. */
 .pages { overflow-x: auto; }
 body.split #pages { overflow: auto; }
+/* Centring an overflowing flex item puts its left half out of reach of the
+   scroller, so zoomed pages start at the left edge - but an auto margin still
+   centres one that is NARROWER than the pane, which is most of the zoom range,
+   and collapses to nothing when it is wider. */
 .pages.zoomed { align-items: flex-start; }
+.pages.zoomed .pageWrap { margin-left: auto; margin-right: auto; }
 
 @media (max-width: 640px) {
   .zoom { order: 5; }

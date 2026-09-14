@@ -8,8 +8,11 @@
   'use strict';
   var FR = (root.FR = root.FR || {});
 
+  // Bump this whenever an existing reader has to be brought along; see migrate.
+  var SCHEMA = 2;
+
   var DEFAULTS = {
-    schemaVersion: 1,
+    schemaVersion: SCHEMA,
 
     /* --- when the reader turns itself on --- */
     autoActivate: false,          // run on every page load
@@ -96,6 +99,7 @@
   function merge(stored) {
     var out = clone(DEFAULTS);
     if (!stored) return out;
+    var was = Number(stored.schemaVersion) || 1;
     Object.keys(out).forEach(function (k) {
       if (k === 'providerConfig') return;
       if (stored[k] !== undefined && stored[k] !== null) out[k] = stored[k];
@@ -107,7 +111,31 @@
         }
       });
     }
-    return out;
+    return migrate(out, was);
+  }
+
+  /**
+   * Bring settings that were stored by an older version up to date.
+   *
+   * Changing a DEFAULT only ever reaches a FRESH install: merge keeps whatever
+   * is already stored, key by key, so for anyone already using FocusRead a new
+   * default is silently ignored - the reader asks why the change did nothing
+   * and there is no error anywhere to explain it. Anything that has to reach an
+   * existing reader belongs here instead, applied once against the version
+   * their settings were written by.
+   *
+   * @param {object} s settings merged over the current defaults
+   * @param {number} was the schemaVersion they were stored with
+   */
+  function migrate(s, was) {
+    if (was < 2) {
+      // Side by side became the default view after the first version shipped,
+      // so every reader who had already opened FocusRead kept the old one.
+      // Applied once: from here on their own choice is what is stored.
+      s.pdfView = 'split';
+    }
+    s.schemaVersion = SCHEMA;
+    return s;
   }
 
   var cached = null;
@@ -116,7 +144,14 @@
     if (cached) return Promise.resolve(cached);
     return new Promise(function (resolve) {
       chrome.storage.local.get('settings', function (r) {
-        cached = merge(r && r.settings);
+        var stored = r && r.settings;
+        cached = merge(stored);
+        // A migration has to be written back. merge() runs on every read, so
+        // an unsaved one would be applied again on the next page load - and
+        // would undo whatever the reader chose in between.
+        if (stored && (Number(stored.schemaVersion) || 1) !== SCHEMA) {
+          chrome.storage.local.set({ settings: cached }, function () {});
+        }
         resolve(cached);
       });
     });
@@ -175,6 +210,7 @@
 
   FR.settings = {
     DEFAULTS: DEFAULTS,
+    SCHEMA: SCHEMA,
     LANGUAGES: LANGUAGES,
     get: get,
     set: set,

@@ -585,6 +585,29 @@
     FR.settings.reset().then(function (s) { settings = s; render(); flashSaved(); });
   });
 
+  /*
+   * Which copy is actually running.
+   *
+   * An unpacked extension does NOT pick up changed files by itself: until it
+   * is reloaded in chrome://extensions, Chrome keeps serving the old ones, and
+   * nothing on screen says so. Printing the version makes "did my update
+   * land?" a question the page can answer.
+   */
+  (function () {
+    var out = $('build');
+    if (!out) return;
+    var v = '';
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getManifest) {
+        // The web build stubs getManifest, and its stub has no version - so
+        // the version has to be checked, not just the function.
+        var m = chrome.runtime.getManifest() || {};
+        if (m.version) v = 'v' + m.version;
+      }
+    } catch (e) { /* no manifest at all */ }
+    out.textContent = v || (FR.BUILD ? 'web ' + FR.BUILD : '');
+  })();
+
   if (location.hash === '#welcome') $('welcome').hidden = false;
 
   Promise.all([FR.settings.get(), FR.speech.getVoices()]).then(function (r) {

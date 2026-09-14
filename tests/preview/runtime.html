@@ -115,7 +115,7 @@
 </script>
 
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
-<script src="../../src/lib/settings.js?v=1789409887"></script>
+<script src="../../src/lib/settings.js?v=1789416460"></script>
 <script src="../../src/lib/translate.js?v=1789357531"></script>
 <script src="../../src/content/speech.js?v=1789412736"></script>
 <script src="../../src/content/engine.js?v=1789366280"></script>
@@ -132,6 +132,7 @@
       (ok ? '' : '\n        want: ' + JSON.stringify(want) + '\n        got : ' + JSON.stringify(got)));
   }
   function section(t) { lines.push('\n--- ' + t + ' ---'); }
+  function merge2(stored) { return stored && stored.pdfView; }
 
   var LONG = 'One two three four five. Six seven eight nine ten. ' +
              'Eleven twelve thirteen fourteen. Fifteen sixteen seventeen eighteen.';
@@ -151,6 +152,43 @@
   }
 
   async function run() {
+    /* ============ settings: an older install is brought forward ============
+     * FIRST, before anything else touches settings: the module caches the
+     * merged copy on the first read, so a migration can only be observed on a
+     * cold cache - which is exactly the situation it exists for, a returning
+     * reader's first page load.
+     */
+    section('settings - an older install is brought forward');
+
+    // Settings as v1 would have written them, with the view the reader had.
+    await new Promise(function (r) {
+      chrome.storage.local.set({ settings: {
+        schemaVersion: 1, pdfView: 'reflow', rate: 1.4
+      } }, r);
+    });
+
+    var mig = await FR.settings.get();
+    eq('the new default view reaches an install that predates it', mig.pdfView, 'split');
+    eq('their own unrelated settings are left alone', mig.rate, 1.4);
+    eq('and the schema is marked as migrated', mig.schemaVersion, FR.settings.SCHEMA);
+
+    var persisted = await new Promise(function (r) {
+      chrome.storage.local.get('settings', function (o) { r(o.settings); });
+    });
+    eq('the migration is written back, not just applied in memory',
+       persisted.schemaVersion, FR.settings.SCHEMA);
+    eq('and written back complete, not as a fragment', persisted.pdfView, 'split');
+
+    // A choice made after the migration has to survive: re-migrating on every
+    // read would quietly undo it on the next page load.
+    await FR.settings.set({ pdfView: 'reflow' });
+    var after = await new Promise(function (r) {
+      chrome.storage.local.get('settings', function (o) { r(o.settings); });
+    });
+    eq('a later choice of the old view is not migrated away again',
+       after.pdfView, 'reflow');
+    await FR.settings.reset();
+
     /* ================= speech: normal path ================= */
     section('speech - normal completion');
     var r = recorder();

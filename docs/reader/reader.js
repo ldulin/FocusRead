@@ -483,7 +483,21 @@
     $('pages').classList.toggle('zoomed', z > 1);
   }
 
-  function setZoom(z) {
+  /**
+   * Zoom, holding one point of the page still.
+   *
+   * Everything scales by the same factor, so where a point sits in the
+   * document is a pair of fractions that survive the re-render; putting the
+   * anchor back under the same screen position afterwards is what makes a
+   * zoom feel like a zoom. Anchoring the scroll TOP instead - and leaving
+   * scrollLeft alone entirely - drops you at the left edge of a page that is
+   * now wider than the pane, which is not where you were looking.
+   *
+   * @param {number} z the new scale
+   * @param {{x:number, y:number}} [at] point to hold, in pane coordinates;
+   *   the middle of the pane if not given, or the pointer for a wheel zoom
+   */
+  function setZoom(z, at) {
     z = Math.min(3, Math.max(0.5, z));
     if (!state.settings) return;
     if (Math.abs(z - zoom()) < 0.001) return;
@@ -491,24 +505,29 @@
     FR.settings.set({ pdfZoom: z });
     showZoom();
     // Only the page-image views care.
-    if (state.mode === 'original' || state.mode === 'split') {
-      var keep = $('pages').scrollTop / Math.max(1, $('pages').scrollHeight);
-      setMode(state.mode).then(function () {
-        // Hold roughly the same place in the document across the re-render.
-        $('pages').scrollTop = keep * $('pages').scrollHeight;
-      });
-    }
+    if (state.mode !== 'original' && state.mode !== 'split') return;
+
+    var pane = $('pages');
+    var ax = at ? at.x : pane.clientWidth / 2;
+    var ay = at ? at.y : pane.clientHeight / 2;
+    var fx = (pane.scrollLeft + ax) / Math.max(1, pane.scrollWidth);
+    var fy = (pane.scrollTop + ay) / Math.max(1, pane.scrollHeight);
+
+    setMode(state.mode).then(function () {
+      pane.scrollLeft = fx * pane.scrollWidth - ax;
+      pane.scrollTop = fy * pane.scrollHeight - ay;
+    });
   }
 
-  function stepZoom(dir) {
+  function stepZoom(dir, at) {
     var z = zoom();
     if (dir > 0) {
       for (var i = 0; i < ZOOM_STEPS.length; i++) {
-        if (ZOOM_STEPS[i] > z + 0.001) return setZoom(ZOOM_STEPS[i]);
+        if (ZOOM_STEPS[i] > z + 0.001) return setZoom(ZOOM_STEPS[i], at);
       }
     } else {
       for (var j = ZOOM_STEPS.length - 1; j >= 0; j--) {
-        if (ZOOM_STEPS[j] < z - 0.001) return setZoom(ZOOM_STEPS[j]);
+        if (ZOOM_STEPS[j] < z - 0.001) return setZoom(ZOOM_STEPS[j], at);
       }
     }
   }
@@ -869,7 +888,10 @@
       if (!(e.ctrlKey || e.metaKey)) return;
       if (state.mode !== 'original' && state.mode !== 'split') return;
       e.preventDefault();
-      stepZoom(e.deltaY < 0 ? 1 : -1);
+      // Zoom about the pointer, the way every other zoomable view does.
+      var box = $('pages').getBoundingClientRect();
+      stepZoom(e.deltaY < 0 ? 1 : -1,
+               { x: e.clientX - box.left, y: e.clientY - box.top });
     }, { passive: false });
 
     $('pagePrev').addEventListener('click', function () { goToPage(Number($('pageNum').value) - 1); });

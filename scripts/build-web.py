@@ -17,12 +17,22 @@ Run it after changing anything under src/ or web/, and commit docs/.
 GitHub Pages then serves main /docs with no build machinery of its own.
 """
 import hashlib
+import json
 import os
 import re
 import shutil
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# What the build id is computed over: the code, not the assets.
+WATCH_FOR_ID = [
+    'src/lib/segmenter.js', 'src/lib/settings.js', 'src/lib/translate.js',
+    'src/content/speech.js', 'src/content/engine.js', 'src/content/ui.js',
+    'src/content/controller.js', 'src/reader/reader.js', 'src/reader/pdf.js',
+    'src/reader/docx.js', 'src/options/options.js', 'web/shim.js',
+]
 OUT = os.path.join(ROOT, 'docs')
 
 # source page -> published name
@@ -34,6 +44,16 @@ PAGES = [
 EXTRA = ['web/shim.js', 'web/mobile.css']
 
 ASSET_RE = re.compile(r'(<(?:script|link|img)\b[^>]*?(?:src|href)=")([^"]+)(")')
+
+
+def build_id():
+    h = hashlib.sha256()
+    for rel in sorted(WATCH_FOR_ID):
+        path = os.path.join(ROOT, rel)
+        if os.path.isfile(path):
+            with open(path, 'rb') as f:
+                h.update(f.read())
+    return time.strftime('%Y-%m-%d') + ' ' + h.hexdigest()[:7]
 
 
 def stamp_of(src_rel):
@@ -84,6 +104,12 @@ MANIFEST = """{
     { "src": "icons/icon128.png", "sizes": "128x128", "type": "image/png" }
   ]
 }
+"""
+
+# The web build has no manifest to read a version out of, so stamp one in.
+# Settings prints it, which is how "am I looking at the new build?" gets an
+# answer without diffing files.
+BUILD_STAMP = """<script>window.FR=window.FR||{};FR.BUILD="%s";</script>
 """
 
 HEAD_EXTRAS = """<link rel="icon" href="icons/icon32.png">
@@ -143,7 +169,7 @@ def build_page(src_rel, out_name):
 
     # Mobile styling last, so it can override the shared sheets.
     html = html.replace('</head>',
-                        HEAD_EXTRAS +
+                        HEAD_EXTRAS + (BUILD_STAMP % BUILD_ID) +
                         '<link rel="stylesheet" href="mobile.css?v=%s">\n</head>' % stamp_of('web/mobile.css'),
                         1)
 
@@ -217,7 +243,18 @@ def build_page(src_rel, out_name):
     return copied
 
 
+BUILD_ID = None
+
+
+def write_build_json():
+    # What the pages check themselves against; fetched with cache: 'no-store'.
+    with open(os.path.join(OUT, 'build.json'), 'w', encoding='utf-8') as f:
+        json.dump({'build': BUILD_ID}, f)
+
+
 def main():
+    global BUILD_ID
+    BUILD_ID = build_id()
     if os.path.isdir(OUT):
         shutil.rmtree(OUT)
     os.makedirs(OUT)
@@ -252,6 +289,9 @@ def main():
     shutil.copy2(os.path.join(ROOT, 'tests', 'fixtures', 'paper.pdf'),
                  os.path.join(OUT, 'sample.pdf'))
     print('copied docs/sample.pdf')
+
+    write_build_json()
+    print('wrote docs/build.json (%s)' % BUILD_ID)
 
     # Pages would otherwise run the whole thing through Jekyll, which ignores
     # files and folders beginning with an underscore and is pure overhead here.

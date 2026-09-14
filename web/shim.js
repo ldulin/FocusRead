@@ -192,4 +192,38 @@
       isAllowedFileSchemeAccess: function (cb) { if (cb) cb(false); }
     }
   };
+
+  /*
+   * Is this page itself stale?
+   *
+   * Every asset it loads is content-hashed, but the HTML naming them cannot
+   * be: GitHub Pages serves it with a ten-minute cache and no way to set
+   * headers, so a returning reader gets yesterday's markup driving today's
+   * scripts. That is invisible - nothing errors, a piece of the page is just
+   * missing or old - and a normal reload inside that window serves the cached
+   * copy again, so it looks like the change was never deployed. Ask the
+   * network which build is current instead, and reload if it disagrees.
+   */
+  function checkBuild() {
+    if (!FR.BUILD || typeof g.fetch !== 'function') return;
+    g.fetch('build.json', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.build || j.build === FR.BUILD) return;
+        // Never while a document is open: reloading would throw it away.
+        var drop = g.document && g.document.getElementById('drop');
+        if (drop && drop.hidden) return;
+        // Once per build per tab, so a cache that refuses to budge cannot put
+        // the page in a reload loop.
+        try {
+          if (g.sessionStorage.getItem('fr-build') === j.build) return;
+          g.sessionStorage.setItem('fr-build', j.build);
+        } catch (e) { return; }
+        g.location.reload();
+      })
+      .catch(function () { /* offline is not a reason to do anything */ });
+  }
+
+  checkBuild();
+
 })(typeof globalThis !== 'undefined' ? globalThis : window);
