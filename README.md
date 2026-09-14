@@ -175,6 +175,14 @@ Worth knowing before you rely on it:
   borders, colours and exact spacing don't survive. Equations are dropped, and
   tracked changes are shown accepted - the reader tells you when either happens.
   Old `.doc` files aren't supported; re-save as `.docx`.
+- **Opening a local file by URL needs two separate things.** The browser's
+  *Allow access to file URLs* toggle on the extensions page, which only you can
+  turn on, **and** a file-scheme host permission in the extension. The wildcard
+  that looks like it covers everything (`*://*/*`) is http and https only, so
+  the file scheme has to be asked for by name - and until it is, the read fails
+  in a way indistinguishable from a missing file. Declaring it grants nothing
+  on its own: the toggle is off by default and still gates it. Dropping a file
+  onto the reader needs neither.
 - **Word-level highlighting depends on the voice.** Network voices often report
   nothing, so on-device voices are preferred. If the highlight runs one word
   ahead of the audio, there's a setting for that.

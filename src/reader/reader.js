@@ -360,11 +360,14 @@
       xhr.onload = function () {
         // No status line to check, so the bytes are the only evidence.
         if (xhr.response && xhr.response.byteLength) return resolve(xhr.response);
-        reject(new Error('the file is empty, or the browser would not read it'));
+        reject(new Error('the file came back empty (status ' + xhr.status + ')'));
       };
       xhr.onerror = function () {
-        reject(new Error('the file could not be read - if it has been moved or renamed, ' +
-                         'open it from the browser again'));
+        // Both requirements were checked before this, so a refusal here is
+        // most likely the file itself rather than the permissions.
+        reject(new Error('the browser refused to read it (status ' + xhr.status + '). ' +
+                         'If the file has been moved or renamed, open it from the browser ' +
+                         'again; otherwise drop it onto this window, which always works'));
       };
       try { xhr.send(); } catch (e) { reject(new Error('the file could not be read')); }
     });
@@ -387,11 +390,17 @@
 
     if (/^file:/i.test(url)) {
       // Extensions cannot read file:// until the user turns it on explicitly.
-      return chromeAllowsFiles().then(function (allowed) {
+      return Promise.all([chromeAllowsFiles(), hasFilePermission()]).then(function (r) {
         if (stale(gen)) return;
-        if (!allowed) {
+        if (!r[0]) {
           showError('To open local files by URL, enable "Allow access to file URLs" for FocusRead on the ' +
                     'chrome://extensions page. Or just drop the file onto this window, which needs no permission.');
+          return;
+        }
+        if (!r[1]) {
+          showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
+                    'chrome://extensions page - Settings should then show v0.2.1 or later. Or drop the file ' +
+                    'onto this window, which needs no permission at all.');
           return;
         }
         // Read the bytes here rather than handing pdf.js the address: see
@@ -418,6 +427,19 @@
     });
   }
 
+  /*
+   * Reading a local file needs TWO independent things, and only one of them is
+   * the switch everyone knows about:
+   *
+   *   1. the user's "Allow access to file URLs" toggle, which nothing but the
+   *      user can turn on, and
+   *   2. a file-scheme host permission in the extension itself. The wildcard
+   *      that looks like it covers everything covers http and https only, so
+   *      the file scheme has to be asked for by name.
+   *
+   * With the toggle on and the permission missing the read simply fails, which
+   * is indistinguishable from a missing file unless they are checked apart.
+   */
   function chromeAllowsFiles() {
     return new Promise(function (resolve) {
       if (chrome.extension && chrome.extension.isAllowedFileSchemeAccess) {
@@ -425,6 +447,15 @@
       } else {
         resolve(false);
       }
+    });
+  }
+
+  function hasFilePermission() {
+    return new Promise(function (resolve) {
+      if (typeof chrome === 'undefined' || !chrome.permissions) return resolve(false);
+      chrome.permissions.contains({ origins: ['file:///*'] }, function (has) {
+        resolve(!!has);
+      });
     });
   }
 
