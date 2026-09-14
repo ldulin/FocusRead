@@ -33,6 +33,8 @@
   var heartbeat = null;
   var token = 0;               // bumped by cancel(); guards stale callbacks
   var cadence = null;          // estimated-cadence interval
+  var cadenceStarter = null;   // the timer that would START one
+  var cadenceState = null;     // enough to resume an estimated cadence
 
   var RATE_MIN = 0.5, RATE_MAX = 2.0;   // above 2.0 remote voices go silent
 
@@ -147,19 +149,25 @@
 
   function stopCadence() {
     if (cadence) { clearInterval(cadence); cadence = null; }
+    // The pending starter matters as much as the interval: a 550ms timer that
+    // outlives its utterance will paint estimated boundaries onto whatever is
+    // speaking next.
+    if (cadenceStarter) { clearTimeout(cadenceStarter); cadenceStarter = null; }
   }
 
   // ~180 wpm at rate 1.0 is a typical synthesiser pace.
-  function startCadence(text, base, rate, mine, emit) {
+  function startCadence(text, base, rate, mine, emit, fromWord) {
     stopCadence();
     var words = wordStarts(text);
     if (!words.length) return;
     var msPerWord = Math.max(90, 60000 / (180 * Math.max(0.1, rate)));
-    var i = 0;
+    var i = fromWord || 0;
+    cadenceState = { text: text, base: base, rate: rate, mine: mine, emit: emit, i: i };
     cadence = setInterval(function () {
-      if (mine !== token || i >= words.length) return stopCadence();
+      if (mine !== token || i >= words.length) { cadenceState = null; return stopCadence(); }
       emit({ charIndex: base + words[i].at, charLength: words[i].len, estimated: true });
       i++;
+      cadenceState.i = i;
     }, msPerWord);
   }
 
@@ -224,7 +232,7 @@
             opts.onboundary({ charIndex: ci, charLength: len, estimated: !!b.estimated });
           }
 
-          pieces.forEach(function (piece, pi) {
+          pieces.every(function (piece, pi) {
             var chunk = full.slice(piece.start, piece.end);
             var u = new root.SpeechSynthesisUtterance(chunk);
             if (voice) { u.voice = voice; u.lang = voice.lang; }
@@ -245,7 +253,8 @@
               // drift cannot accumulate across a long sentence.
               stopCadence();
               if (!sawBoundary) {
-                setTimeout(function () {
+                cadenceStarter = setTimeout(function () {
+                  cadenceStarter = null;
                   if (mine === token && !sawBoundary) {
                     startCadence(chunk, piece.start, rate, mine, emit);
                   }
@@ -289,8 +298,19 @@
               if (mine !== token) return resolve();
               // Our own cancel() lands here; that is not a failure.
               if (err === 'interrupted' || err === 'canceled') return resolve();
+
+              // Every piece of this sentence was queued up front, so the rest
+              // are still sitting in the browser's queue and will happily keep
+              // speaking. Invalidate them, then flush the queue: without the
+              // token bump their boundary events would carry on repainting the
+              // karaoke highlight for a sentence the UI has already reported as
+              // stopped, and onend could never fire because the failed piece
+              // never increments `finished`.
+              token++;
               stopHeartbeat();
               stopCadence();
+              try { synth.cancel(); } catch (e2) { /* noop */ }
+
               if (opts.onerror) opts.onerror({ error: err });
               reject(new Error('Speech failed: ' + err));
             };
@@ -298,12 +318,18 @@
             try {
               synth.speak(u);         // the browser queues these in order
             } catch (err) {
-              if (pi === 0) {
-                stopHeartbeat();
-                if (opts.onerror) opts.onerror({ error: String(err) });
-                reject(err);
-              }
+              // Swallowing this for pi > 0 would strand the sentence: the piece
+              // fires neither end nor error, so `finished` never reaches
+              // pieces.length and onend is lost with no error reported at all.
+              token++;
+              stopHeartbeat();
+              stopCadence();
+              try { synth.cancel(); } catch (e2) { /* noop */ }
+              if (opts.onerror) opts.onerror({ error: String(err) });
+              reject(err);
+              return false;           // stop queuing the remaining pieces
             }
+            return true;
           });
         }, 30);
       });
@@ -325,7 +351,18 @@
 
   function resume() {
     if (!synth) return false;
-    try { synth.resume(); startHeartbeat(); return true; } catch (e) { return false; }
+    try {
+      synth.resume();
+      startHeartbeat();
+      // A voice that emits no boundary events was being tracked by the
+      // estimated cadence; pause() stopped it, so without this the word
+      // highlight stays frozen for the rest of the sentence.
+      if (cadenceState && cadenceState.mine === token) {
+        var c = cadenceState;
+        startCadence(c.text, c.base, c.rate, c.mine, c.emit, c.i);
+      }
+      return true;
+    } catch (e) { return false; }
   }
 
   function state() {

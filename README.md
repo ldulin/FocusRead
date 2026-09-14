@@ -171,13 +171,19 @@ through `osascript -l JavaScript`:
 | `tests/syntax.sh` | every JS file parses |
 | `tests/wiring.py` | nothing references anything that doesn't exist: manifest paths, injection order, element ids, message types, settings keys, CSS classes |
 
-Two suites need a real DOM and run in the browser instead:
-`tests/segmenter.test.html` (the segmentation cases) and
-`tests/preview/sanitizer.html`, which attacks the `.docx` sanitiser with 22
-payloads - script tags, event handlers, `javascript:` and `data:text/html`
-URLs, SVG, malformed nesting - and finishes by rendering the sanitised output
-to confirm nothing actually executes. That matters because a `.docx` is
-untrusted input rendered inside an extension page that can call `chrome.*`.
+Three more suites need a real DOM and run in the browser. JavaScriptCore has
+no `setTimeout` and never drains microtasks, so anything promise- or
+timer-based has to be tested there:
+
+| Page | Covers |
+| --- | --- |
+| `tests/preview/runtime.html` | the speech queue, driven by a fake synthesiser the test advances by hand - normal completion, a piece failing mid-queue, cancellation, one-word lag - plus settings persistence and MyMemory's byte chunking |
+| `tests/preview/sanitizer.html` | 22 attacks on the `.docx` sanitiser, ending by rendering the output to confirm nothing executes |
+| `tests/segmenter.test.html` | the segmentation cases, in a browser |
+
+`tests/preview/page.html` is a sample paper with the reader already running on
+it, including the awkward cases: adjacent inline elements, a block nested
+inside flowing text, an SVG, a sentence wrapped entirely in a link.
 
 ### Looking at the UI
 

@@ -57,8 +57,10 @@
       } else {
         opts.url = source.url;
         // A DNR redirect discards the response the browser already fetched, so
-        // we fetch again - and a paywalled PDF needs the session cookie.
-        opts.withCredentials = true;
+        // we fetch again - and a paywalled PDF needs the session cookie. Only
+        // on that trusted path: credentials must never be attached to a URL
+        // chosen by whoever opened our web-accessible reader page.
+        opts.withCredentials = !!source.withCredentials;
       }
 
       var task = L.mod.getDocument(opts);
@@ -110,21 +112,53 @@
    * many text runs straddle it.
    */
   function detectColumns(boxes, pageWidth) {
-    if (boxes.length < 40) return null;
-    var mid = pageWidth / 2;
-    var tol = pageWidth * 0.02;
+    if (boxes.length < 40 || !pageWidth) return null;
 
-    var straddle = 0, left = 0, right = 0;
+    // Counting how many runs STRADDLE the midline only works when a run is a
+    // whole line. Plenty of PDFs emit one run per word, and a word almost
+    // never straddles the centre - so a perfectly ordinary single-column page
+    // looked like two columns and got read in the wrong order.
+    //
+    // Look for the thing that actually defines a two-column page instead: a
+    // vertical band down the middle that no text occupies at all.
+    var BINS = 200;
+    var covered = new Array(BINS);
+    for (var i = 0; i < BINS; i++) covered[i] = 0;
+
     boxes.forEach(function (b) {
-      if (b.x < mid - tol && b.x + b.w > mid + tol) straddle++;
-      else if (b.x + b.w / 2 < mid) left++;
-      else right++;
+      var from = Math.max(0, Math.floor((b.x / pageWidth) * BINS));
+      var to = Math.min(BINS - 1, Math.ceil(((b.x + Math.max(b.w, 1)) / pageWidth) * BINS));
+      for (var k = from; k <= to; k++) covered[k]++;
     });
 
+    // The gutter has to sit near the middle of the page.
+    var lo = Math.floor(BINS * 0.34), hi = Math.ceil(BINS * 0.66);
+    var best = null, runStart = -1;
+    for (var j = lo; j <= hi; j++) {
+      if (!covered[j]) {
+        if (runStart === -1) runStart = j;
+        if (!best || (j - runStart) > (best.end - best.start)) best = { start: runStart, end: j };
+      } else {
+        runStart = -1;
+      }
+    }
+    if (!best) return null;
+
+    var gutterWidth = ((best.end - best.start + 1) / BINS) * pageWidth;
+    if (gutterWidth < pageWidth * 0.018) return null;          // too narrow to be a gutter
+
+    var gutter = ((best.start + best.end + 1) / 2 / BINS) * pageWidth;
+
+    // Both sides must carry real content, or this is a centred heading with
+    // white space either side rather than a column break.
+    var left = 0, right = 0;
+    boxes.forEach(function (b) {
+      if (b.x + b.w / 2 < gutter) left++; else right++;
+    });
     var total = boxes.length;
-    if (straddle / total > 0.12) return null;           // too much full-width text
     if (left / total < 0.25 || right / total < 0.25) return null;
-    return mid;
+
+    return gutter;
   }
 
   function columnOf(b, gutter) {
@@ -196,26 +230,56 @@
    * Reading "Nature Neuroscience | VOL 24 | 1189" mid-paragraph is exactly the
    * kind of thing that makes TTS on papers unbearable.
    */
-  function findRunningHeads(pageLines) {
-    var counts = {};
-    var pages = pageLines.length;
-    if (pages < 3) return {};
+  /**
+   * @param {Array<{lines:Array, height:number}>} pages
+   *
+   * Candidates are chosen by POSITION on the page, not by index in the line
+   * array: after column sorting, "the last two entries" are the foot of the
+   * right-hand column, not the foot of the page.
+   *
+   * A candidate must also appear at roughly the same height on every page.
+   * Digit normalisation makes "Table 1" and "Table 2" the same key, so without
+   * a position check a figure caption that happens to sit near the top on
+   * several pages would be deleted as furniture.
+   */
+  function edgeLines(page) {
+    var h = page.height || 0;
+    if (!h) return page.lines.slice(0, 2).concat(page.lines.slice(-2));
+    var topBand = h * 0.90, bottomBand = h * 0.10;
+    return page.lines.filter(function (ln) {
+      return ln.y >= topBand || ln.y <= bottomBand;
+    });
+  }
 
-    pageLines.forEach(function (lines) {
-      var edges = lines.slice(0, 2).concat(lines.slice(-2));
+  function findRunningHeads(pages) {
+    var counts = {};
+    var n = pages.length;
+    if (n < 3) return {};
+
+    pages.forEach(function (page) {
       var seen = {};
-      edges.forEach(function (ln) {
+      edgeLines(page).forEach(function (ln) {
         if (!isFurniture(ln.text)) return;
         var key = normaliseForRepeat(ln.text);
         if (!key || seen[key]) return;
         seen[key] = 1;
-        counts[key] = (counts[key] || 0) + 1;
+        if (!counts[key]) counts[key] = { n: 0, ys: [] };
+        counts[key].n++;
+        counts[key].ys.push(ln.y);
       });
     });
 
-    var threshold = Math.max(3, Math.ceil(pages * 0.4));
+    var threshold = Math.max(3, Math.ceil(n * 0.4));
+    var pageHeight = pages[0].height || 800;
     var heads = {};
-    Object.keys(counts).forEach(function (k) { if (counts[k] >= threshold) heads[k] = true; });
+    Object.keys(counts).forEach(function (k) {
+      var c = counts[k];
+      if (c.n < threshold) return;
+      var min = Math.min.apply(null, c.ys), max = Math.max.apply(null, c.ys);
+      // Same text, same place, on most pages.
+      if (max - min > pageHeight * 0.06) return;
+      heads[k] = true;
+    });
     return heads;
   }
 
@@ -291,7 +355,11 @@
       }
 
       if (breakHere) {
-        cur = { type: heading ? 'h' : 'p', lines: [ln.text] };
+        cur = {
+          type: heading ? 'h' : 'p',
+          lines: [ln.text],
+          brokeColumn: !!(prev && prev.col !== ln.col)
+        };
         blocks.push(cur);
       } else {
         cur.lines.push(ln.text);
@@ -300,9 +368,44 @@
 
     return blocks.map(function (b) {
       var lns = joinHyphens && FR.segmenter ? FR.segmenter.dehyphenate(b.lines.slice()) : b.lines;
-      return { type: b.type, text: lns.join(' ').replace(/\s+/g, ' ').trim() };
+      return {
+        type: b.type,
+        text: lns.join(' ').replace(/\s+/g, ' ').trim(),
+        brokeColumn: b.brokeColumn
+      };
     }).filter(function (b) { return b.text.length > 0; });
   }
+
+  /**
+   * Rejoin a paragraph that a column or page boundary cut in half.
+   *
+   * A paragraph running down the left column and continuing at the top of the
+   * right one is one paragraph; left split, it is read as two, mis-segmented
+   * at the seam, and translated as two fragments.
+   */
+  function mergeContinuations(blocks) {
+    var out = [];
+    blocks.forEach(function (b) {
+      var prev = out[out.length - 1];
+      var continues = prev &&
+        b.type === 'p' && prev.type === 'p' &&
+        (b.brokeColumn || b.firstOnPage) &&
+        !ENDS_SENTENCE.test(prev.text) &&
+        /^[a-z(\[]/.test(b.text);
+
+      if (continues) {
+        var joined = FR.segmenter
+          ? FR.segmenter.dehyphenate([prev.text, b.text]).join(' ')
+          : prev.text + ' ' + b.text;
+        prev.text = joined.replace(/\s+/g, ' ').trim();
+      } else {
+        out.push(b);
+      }
+    });
+    return out;
+  }
+
+  var ENDS_SENTENCE = /[.!?:;]["'\u2019\u201D)\]]?$/;
 
   /* ------------------------------------------------------------------ *
    * Public: reflow extraction
@@ -323,13 +426,23 @@
       (function (pageNum) {
         chain = chain.then(function () {
           return doc.getPage(pageNum).then(function (page) {
-            var viewport = page.getViewport({ scale: 1 });
+            // Text-item transforms are in unrotated PDF user space. Taking the
+            // width from a rotated viewport compares them against the wrong
+            // axis, so on a landscape-rotated page every column and position
+            // test is measured against the height instead.
+            var base = page.getViewport({ scale: 1, rotation: 0 });
             return page.getTextContent().then(function (tc) {
               var boxes = toBoxes(tc);
-              var gutter = detectColumns(boxes, viewport.width);
+              var gutter = detectColumns(boxes, base.width);
               var lines = toLines(boxes, gutter);
               lines.forEach(function (ln) { allHeights.push(ln.h); });
-              perPage.push({ page: pageNum, lines: lines, columns: gutter === null ? 1 : 2 });
+              perPage.push({
+                page: pageNum,
+                lines: lines,
+                height: base.height,
+                width: base.width,
+                columns: gutter === null ? 1 : 2
+              });
               page.cleanup();
               if (onProgress) onProgress(pageNum / total);
             });
@@ -341,12 +454,18 @@
     return chain.then(function () {
       perPage.sort(function (a, b) { return a.page - b.page; });
       var bodyHeight = median(allHeights) || 10;
-      var heads = opts.stripRunningHeads ? findRunningHeads(perPage.map(function (p) { return p.lines; })) : {};
+      var heads = opts.stripRunningHeads ? findRunningHeads(perPage) : {};
 
       var kept = perPage.map(function (p) {
-        var lines = p.lines.filter(function (ln, i) {
-          var edge = i < 2 || i >= p.lines.length - 2;
-          if (!edge) return true;
+        var h = p.height || 0;
+        var topBand = h * 0.90, bottomBand = h * 0.10;
+        var lines = p.lines.filter(function (ln) {
+          // Index-based edges are wrong once lines are sorted by column: entry
+          // 0 is the top of the LEFT column and the last entry is the foot of
+          // the RIGHT one, so a two-column page had its real header kept and a
+          // mid-page line examined instead.
+          var atEdge = h ? (ln.y >= topBand || ln.y <= bottomBand) : true;
+          if (!atEdge) return true;
           if (PAGE_NUMBER.test(ln.text)) return false;
           return !heads[normaliseForRepeat(ln.text)];
         });
@@ -363,21 +482,8 @@
         });
       });
 
-      // Stitch a paragraph that runs across a page break.
-      var merged = [];
-      blocks.forEach(function (b) {
-        var prev = merged[merged.length - 1];
-        var continues = prev && b.firstOnPage && b.type === 'p' && prev.type === 'p' &&
-          !/[.!?:;]["'\u2019\u201D)\]]?$/.test(prev.text) && /^[a-z(\[]/.test(b.text);
-        if (continues) {
-          var joined = FR.segmenter
-            ? FR.segmenter.dehyphenate([prev.text, b.text]).join(' ')
-            : prev.text + ' ' + b.text;
-          prev.text = joined.replace(/\s+/g, ' ').trim();
-        } else {
-          merged.push(b);
-        }
-      });
+      // Stitch paragraphs cut in half by a column break or a page break.
+      var merged = mergeContinuations(blocks);
 
       var twoCol = kept.filter(function (p) { return p.columns === 2; }).length;
       if (twoCol) notices.push(twoCol + ' of ' + total + ' pages were read as two columns.');
@@ -395,7 +501,7 @@
    * Public: original-layout rendering
    * ------------------------------------------------------------------ */
 
-  function renderPage(doc, mod, pageNum, container, scale) {
+  function renderPage(doc, mod, pageNum, container, scale, placeholder) {
     return doc.getPage(pageNum).then(function (page) {
       var viewport = page.getViewport({ scale: scale });
       var dpr = Math.min(2, root.devicePixelRatio || 1);
@@ -422,7 +528,14 @@
       layer.style.height = Math.floor(viewport.height) + 'px';
       wrap.appendChild(layer);
 
-      container.appendChild(wrap);
+      // Insert in the right place up front so page order is correct, then
+      // remove it again if rendering fails - the old code appended
+      // unconditionally and left a blank white rectangle behind on error.
+      if (placeholder && placeholder.parentNode === container) {
+        container.insertBefore(wrap, placeholder);
+      } else {
+        container.appendChild(wrap);
+      }
 
       var ctx = canvas.getContext('2d');
       ctx.scale(dpr, dpr);
@@ -441,7 +554,12 @@
         return null;
       }).then(function () {
         page.cleanup();
+        if (placeholder && placeholder.parentNode) placeholder.remove();
         return wrap;
+      }).catch(function (err) {
+        if (wrap.parentNode) wrap.remove();
+        try { page.cleanup(); } catch (e) { /* noop */ }
+        throw err;
       });
     });
   }
@@ -461,6 +579,8 @@
       findRunningHeads: findRunningHeads,
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
+      mergeContinuations: mergeContinuations,
+      edgeLines: edgeLines,
       isHeadingLine: isHeadingLine,
       joinItems: joinItems,
       median: median,

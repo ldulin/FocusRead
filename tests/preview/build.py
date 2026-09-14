@@ -56,7 +56,7 @@ for page in PAGES:
 
 # page.html is hand-written and already lives here with correct paths; it only
 # needs its cache-busters refreshed so an edit to src/ is actually picked up.
-STANDALONE = ['page.html']
+STANDALONE = ['page.html', 'runtime.html', 'sanitizer.html']
 for name in STANDALONE:
     path = os.path.join(OUT, name)
     if not os.path.exists(path):

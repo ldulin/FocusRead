@@ -93,7 +93,9 @@ function notifyUnsupported(tab) {
   chrome.action.setTitle({ title: 'FocusRead - ' + why, tabId: tab && tab.id });
 }
 
-chrome.action.onClicked.addListener(function () { actOnActiveTab({ type: 'FR_TOGGLE' }); });
+// No chrome.action.onClicked listener: the action declares a default_popup, so
+// Chrome opens the popup and the click event is never dispatched. The popup's
+// "Start reading this page" button sends FR_TOGGLE_ACTIVE_TAB instead.
 
 chrome.commands.onCommand.addListener(function (command) {
   if (command === 'toggle-reader') actOnActiveTab({ type: 'FR_TOGGLE' });
@@ -125,11 +127,15 @@ function buildMenus() {
 chrome.runtime.onInstalled.addListener(function (details) {
   buildMenus();
   syncPdfRules();
+  syncAutoActivation();
   if (details && details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#welcome') });
   }
 });
-chrome.runtime.onStartup.addListener(syncPdfRules);
+chrome.runtime.onStartup.addListener(function () {
+  syncPdfRules();
+  syncAutoActivation();
+});
 
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
   if (!tab || !tab.id) return;
@@ -147,6 +153,70 @@ chrome.contextMenus.onClicked.addListener(function (info, tab) {
 function openReader() {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/reader/reader.html') });
 }
+
+/* ------------------------------------------------------------------ *
+ * Auto-activation
+ *
+ * The settings existed but nothing acted on them: content scripts are only
+ * ever injected on demand, so "start automatically" could never fire. Doing it
+ * properly means a REGISTERED content script, which needs a real host
+ * permission - requested from the options page, never granted at install.
+ * ------------------------------------------------------------------ */
+
+var AUTO_SCRIPT_ID = 'focusread-auto';
+
+function autoMatches(settings, granted) {
+  if (settings.autoActivate) {
+    // Only where the user actually granted access.
+    return (granted.origins || []).filter(function (o) { return /^https?:/.test(o); });
+  }
+  return (settings.autoActivateHosts || [])
+    .map(function (h) { return String(h).trim(); })
+    .filter(Boolean)
+    .map(function (h) { return '*://' + h + '/*'; });
+}
+
+function syncAutoActivation() {
+  if (!chrome.scripting || !chrome.scripting.getRegisteredContentScripts) return Promise.resolve();
+
+  return Promise.all([FR.settings.get(), chrome.permissions.getAll()])
+    .then(function (r) {
+      var settings = r[0], granted = r[1];
+      var matches = autoMatches(settings, granted);
+
+      return chrome.scripting.getRegisteredContentScripts({ ids: [AUTO_SCRIPT_ID] })
+        .catch(function () { return []; })
+        .then(function (existing) {
+          if (!matches.length) {
+            return existing.length
+              ? chrome.scripting.unregisterContentScripts({ ids: [AUTO_SCRIPT_ID] }).catch(function () {})
+              : null;
+          }
+          var spec = {
+            id: AUTO_SCRIPT_ID,
+            matches: matches,
+            js: INJECT_JS,
+            css: INJECT_CSS,
+            runAt: 'document_idle',
+            persistAcrossSessions: true
+          };
+          return existing.length
+            ? chrome.scripting.updateContentScripts([spec]).catch(function () {})
+            : chrome.scripting.registerContentScripts([spec]).catch(function (e) {
+                console.warn('[FocusRead] could not register auto-activation', e);
+              });
+        });
+    });
+}
+
+// Granting or revoking a host has to re-register immediately, not at next start.
+if (chrome.permissions && chrome.permissions.onAdded) {
+  chrome.permissions.onAdded.addListener(syncAutoActivation);
+  chrome.permissions.onRemoved.addListener(syncAutoActivation);
+}
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area === 'local' && changes.settings) syncAutoActivation();
+});
 
 /* ------------------------------------------------------------------ *
  * Translation relay
@@ -262,11 +332,14 @@ function setPdfIntercept(enabled) {
       .catch(function (e) { return { ok: false, error: String(e.message || e) }; });
   }
 
-  return chrome.permissions.request({
+  // The permission itself is requested by the OPTIONS PAGE, inside its click
+  // handler. chrome.permissions.request() requires transient user activation,
+  // and a service worker never has any - calling it here failed every time.
+  return chrome.permissions.contains({
     permissions: ['declarativeNetRequest'],
     origins: ['*://*/*']
-  }).then(function (granted) {
-    if (!granted) return { ok: false, error: 'Permission declined' };
+  }).then(function (has) {
+    if (!has) return { ok: false, error: 'Permission was not granted' };
     return chrome.declarativeNetRequest.updateDynamicRules({
       removeRuleIds: [PDF_RULE_ID],
       addRules: pdfRules()

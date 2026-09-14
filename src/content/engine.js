@@ -35,9 +35,17 @@
     ruby: 1, 'ruby-text': 1, contents: 1, 'inline-table': 1
   };
 
+  var XHTML_NS = 'http://www.w3.org/1999/xhtml';
+
   function isSkipped(el) {
     if (!el || el.nodeType !== 1) return false;
-    if (SKIP_TAGS[el.tagName]) return true;
+    // tagName is case-SENSITIVE outside HTML: an <svg> element reports "svg",
+    // so an uppercase table lookup silently misses every SVG and MathML node
+    // and we end up injecting wrappers into them.
+    if (SKIP_TAGS[String(el.tagName).toUpperCase()]) return true;
+    // Anything outside the HTML namespace is foreign content we should not
+    // rewrite - SVG, MathML, and anything else embedded inline.
+    if (el.namespaceURI && el.namespaceURI !== XHTML_NS) return true;
     if (el.isContentEditable) return true;
     if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
     if (el.classList && el.classList.contains('fr-ignore')) return true;
@@ -113,7 +121,11 @@
     var self = this;
     var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
-        if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        // Whitespace-only nodes are KEPT. Rejecting them concatenates the text
+        // either side into one word: "<span>Hello</span> <span>world</span>"
+        // becomes "Helloworld", which then mis-segments and is read aloud
+        // wrong. They are dropped later, when a block turns out to be blank.
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
         for (var p = n.parentNode; p && p !== scope.parentNode; p = p.parentNode) {
           if (isSkipped(p)) return NodeFilter.FILTER_REJECT;
         }
@@ -121,14 +133,17 @@
       }
     });
 
-    var blocks = [], byEl = new Map(), node;
+    // Keyed by a RUN of consecutive text nodes rather than by element. In
+    // "<div>intro <p>para</p> tail</div>" the div's text is interrupted by the
+    // paragraph; grouping purely by element would put "tail" in the same block
+    // as "intro" and read it before the paragraph that visually precedes it.
+    var blocks = [], node, entry = null, lastBlock = null;
     while ((node = walker.nextNode())) {
       var block = self._blockOf(node);
-      var entry = byEl.get(block);
-      if (!entry) {
+      if (!entry || block !== lastBlock) {
         entry = { el: block, pieces: [], text: '' };
-        byEl.set(block, entry);
         blocks.push(entry);
+        lastBlock = block;
       }
       entry.pieces.push({ node: node, start: entry.text.length, len: node.nodeValue.length });
       entry.text += node.nodeValue;
@@ -249,7 +264,20 @@
       }
     }
 
-    return records.filter(function (r) { return r.marks.length > 0; });
+    // Renumber only now. A record whose wrapping produced no marks (its text
+    // nodes were removed mid-scan, or fell entirely inside a skipped subtree)
+    // is dropped here, and every later record's position shifts. Numbering
+    // before this point leaves data-i attributes pointing at the wrong entry
+    // in sentences[], so clicking one sentence highlights another.
+    var kept = records.filter(function (r) { return r.marks.length > 0; });
+    kept.forEach(function (rec, k) {
+      var idx = startIndex + k;
+      if (rec.i !== idx) {
+        rec.i = idx;
+        rec.marks.forEach(function (m) { m.setAttribute('data-i', String(idx)); });
+      }
+    });
+    return kept;
   };
 
   /**
@@ -331,8 +359,20 @@
     // Only scroll when the sentence is outside a comfortable middle band, so
     // reading does not jitter line by line.
     if (r.top >= vh * 0.18 && r.bottom <= vh * 0.82) return;
+    // Smooth scrolling fires on every sentence; for a reader who has asked the
+    // OS to reduce motion that is exactly the kind of repeated movement that
+    // causes trouble.
+    var reduce = false;
     try {
-      marks[0].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      reduce = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) { /* noop */ }
+
+    try {
+      marks[0].scrollIntoView({
+        behavior: reduce ? 'auto' : 'smooth',
+        block: 'center',
+        inline: 'nearest'
+      });
     } catch (e) {
       marks[0].scrollIntoView();
     }
@@ -431,9 +471,19 @@
     }
     node.textContent = text || '';
     node.style.display = text ? '' : 'none';
-    if (node.previousSibling !== last || !node.parentNode) {
+
+    // Insert after the last mark - but never INSIDE a link or another inline
+    // wrapper, which would make the whole translation clickable and inherit
+    // the link's styling. Climb to the outermost inline ancestor first.
+    var anchor = last;
+    while (anchor.parentElement &&
+           anchor.parentElement !== rec.blockEl &&
+           this._isInline(anchor.parentElement)) {
+      anchor = anchor.parentElement;
+    }
+    if (node.previousSibling !== anchor || !node.parentNode) {
       this._mutating = true;
-      last.parentNode.insertBefore(node, last.nextSibling);
+      if (anchor.parentNode) anchor.parentNode.insertBefore(node, anchor.nextSibling);
       this._mutating = false;
     }
   };
@@ -468,7 +518,13 @@
     unwrapAll(this.root, 'FR-B');
     var frac = Math.max(0.1, Math.min(0.9, strength || 0.4));
     var marks = this.root.querySelectorAll('fr-s');
-    for (var i = 0; i < marks.length; i++) boldHeads(marks[i], frac);
+    for (var i = 0; i < marks.length; i++) {
+      // unwrapAll leaves the text nodes it un-nested still split at the old
+      // bold boundaries. Without merging them first, a second application
+      // measures word lengths from fragments and bolds the wrong letters.
+      try { marks[i].normalize(); } catch (e) { /* noop */ }
+      boldHeads(marks[i], frac);
+    }
     this._mutating = false;
   };
 
@@ -565,9 +621,22 @@
     if (this._observer) { this._observer.disconnect(); this._observer = null; }
     this.clearWord();
     this.clearTranslations();
+
+    // Collect the blocks we actually touched BEFORE unwrapping.
+    var touched = [];
+    this.sentences.forEach(function (rec) {
+      if (rec.blockEl && touched.indexOf(rec.blockEl) === -1) touched.push(rec.blockEl);
+    });
+
     unwrapAll(this.root, 'FR-B');
     unwrapAll(this.root, 'FR-S');
-    try { this.root.normalize(); } catch (e) { /* noop */ }
+
+    // normalize() merges adjacent text nodes, which is exactly what we want
+    // for the nodes we split - and exactly what we must not do to the rest of
+    // the page, where a site may hold references to specific text nodes.
+    touched.forEach(function (el) {
+      try { if (el && el.normalize) el.normalize(); } catch (e) { /* detached */ }
+    });
     this.sentences = [];
     this.index = -1;
     this._attached = false;

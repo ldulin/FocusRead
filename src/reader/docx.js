@@ -93,9 +93,18 @@
     // Depth-first, bottom-up, so unwrapping a parent cannot skip children.
     var all = Array.prototype.slice.call(body.querySelectorAll('*')).reverse();
     all.forEach(function (el) {
-      var tag = el.tagName;
+      // tagName is case-SENSITIVE for foreign content: an <svg> element reports
+      // "svg", so an uppercase lookup missed it entirely and the element was
+      // merely unwrapped - spilling the text of any <script> or <style> inside
+      // it into the document as visible prose.
+      var tag = String(el.tagName || '').toUpperCase();
+      if (!el.isConnected) return;                  // removed with an ancestor
 
-      if (DROP_ENTIRELY[tag]) { el.remove(); return; }
+      if (DROP_ENTIRELY[tag] ||
+          (el.namespaceURI && el.namespaceURI !== 'http://www.w3.org/1999/xhtml')) {
+        el.remove();
+        return;
+      }
 
       if (!ALLOWED[tag]) {                       // unknown tag: keep the text
         var parent = el.parentNode;

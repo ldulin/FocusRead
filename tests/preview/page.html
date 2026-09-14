@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Test article - FocusRead</title>
-<link rel="stylesheet" href="../../src/content/content.css?v=1789336367">
+<link rel="stylesheet" href="../../src/content/content.css?v=1789352295">
 <style>
   body { max-width: 42rem; margin: 40px auto; padding: 0 22px 40vh;
          font: 17px/1.7 Georgia, serif; color: #23262b; background: #fbfbfc; }
@@ -52,14 +52,27 @@ reader, as should the code block below.</p>
   <li>Second item, which runs on a little longer and ends here.</li>
 </ul>
 
+<!-- Cases that specifically exercise the engine's trickier paths. -->
+<p id="spaced"><span>Adjacent</span> <span>spans</span> <span>separated</span> <span>by</span> <span>whitespace</span> nodes.</p>
+
+<div id="mixed">Intro text before the nested block.<p>The nested paragraph itself.</p>Tail text after it.</div>
+
+<p id="linked">A sentence inside <a href="#x">a link that spans the whole sentence.</a> And another after it.</p>
+
+<p id="svgcase">Before the graphic.
+  <svg width="60" height="20" viewBox="0 0 60 20"><text x="0" y="14">SVGTEXT</text></svg>
+  After the graphic.</p>
+
+<p id="btncase">A paragraph with <button type="button" id="pagebtn">a page button</button> inside it.</p>
+
 <script src="stub.js?v=1789335491"></script>
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
-<script src="../../src/lib/settings.js?v=1789334493"></script>
-<script src="../../src/lib/translate.js?v=1789335625"></script>
-<script src="../../src/content/speech.js?v=1789334295"></script>
-<script src="../../src/content/engine.js?v=1789336373"></script>
-<script src="../../src/content/ui.js?v=1789336367"></script>
-<script src="../../src/content/controller.js?v=1789335436"></script>
+<script src="../../src/lib/settings.js?v=1789352272"></script>
+<script src="../../src/lib/translate.js?v=1789352664"></script>
+<script src="../../src/content/speech.js?v=1789351876"></script>
+<script src="../../src/content/engine.js?v=1789352227"></script>
+<script src="../../src/content/ui.js?v=1789352272"></script>
+<script src="../../src/content/controller.js?v=1789352664"></script>
 <script>
   // Stand in for the content-script entry point so the page can be driven
   // from the console during development.

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Runtime tests</title>
+<style>body{font:13px ui-monospace,Menlo,monospace;padding:20px;white-space:pre-wrap;line-height:1.55}
+.p{color:#0a7a55}.f{color:#c0271d;font-weight:700}h3{margin:18px 0 6px;font-size:13px}</style>
+</head>
+<body><div id="out">running...</div>
+
+<script src="stub.js?v=1789335491"></script>
+<script>
+/*
+ * A speech engine we drive by hand.
+ *
+ * Installed BEFORE speech.js, which captures root.speechSynthesis at load.
+ * Utterances are queued but never advance on their own: a test calls drive()
+ * to decide exactly which piece starts, which emits boundaries, and which
+ * fails. That makes the queue semantics - the part real timers make
+ * untestable - deterministic.
+ */
+(function () {
+  function FakeUtterance(text) {
+    this.text = text;
+    this.onstart = this.onend = this.onerror = this.onboundary = null;
+  }
+  var fake = {
+    _queue: [],
+    speaking: false, paused: false, pending: false,
+    speak: function (u) { this._queue.push(u); this.pending = true; },
+    cancel: function () {
+      var q = this._queue.splice(0);
+      this.speaking = false; this.pending = false;
+      q.forEach(function (u) { if (u.onerror) u.onerror({ error: 'canceled' }); });
+    },
+    pause: function () { this.paused = true; },
+    resume: function () { this.paused = false; },
+    getVoices: function () {
+      return [{ voiceURI: 'local-en', name: 'Local EN', lang: 'en-US', localService: true, default: true }];
+    },
+    addEventListener: function (_, fn) { if (fn) fn(); },
+    removeEventListener: function () {}
+  };
+  Object.defineProperty(window, 'speechSynthesis', { value: fake, configurable: true });
+  Object.defineProperty(window, 'SpeechSynthesisUtterance', { value: FakeUtterance, configurable: true });
+  window.__fake = fake;
+
+  /** Run the queued utterances. opts.failAt = index that errors instead of ending. */
+  window.__drive = function (opts) {
+    opts = opts || {};
+    var i = 0;
+    while (fake._queue.length) {
+      var u = fake._queue.shift();
+      fake.speaking = true;
+      if (u.onstart) u.onstart();
+      if (opts.boundariesPerPiece) {
+        for (var b = 0; b < opts.boundariesPerPiece; b++) {
+          if (u.onboundary) u.onboundary({ name: 'word', charIndex: b * 4, charLength: 3 });
+        }
+      }
+      if (opts.failAt === i) {
+        if (u.onerror) u.onerror({ error: 'synthesis-failed' });
+      } else if (u.onend) {
+        u.onend();
+      }
+      i++;
+    }
+    fake.speaking = false;
+    return i;
+  };
+})();
+</script>
+
+<script src="../../src/lib/segmenter.js?v=1789335851"></script>
+<script src="../../src/lib/settings.js?v=1789352272"></script>
+<script src="../../src/lib/translate.js?v=1789352664"></script>
+<script src="../../src/content/speech.js?v=1789351876"></script>
+
+<script>
+(function () {
+  var pass = 0, fail = 0, lines = [];
+  var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+
+  function eq(label, got, want) {
+    var ok = JSON.stringify(got) === JSON.stringify(want);
+    ok ? pass++ : fail++;
+    lines.push((ok ? '[PASS] ' : '[FAIL] ') + label +
+      (ok ? '' : '\n        want: ' + JSON.stringify(want) + '\n        got : ' + JSON.stringify(got)));
+  }
+  function section(t) { lines.push('\n--- ' + t + ' ---'); }
+
+  var LONG = 'One two three four five. Six seven eight nine ten. ' +
+             'Eleven twelve thirteen fourteen. Fifteen sixteen seventeen eighteen.';
+
+  function recorder() {
+    var ev = { start: 0, end: 0, error: [], boundary: [] };
+    return {
+      ev: ev,
+      opts: {
+        maxChars: 40, localOnly: true, rate: 1,
+        onstart: function () { ev.start++; },
+        onend: function () { ev.end++; },
+        onerror: function (e) { ev.error.push(e.error); },
+        onboundary: function (b) { ev.boundary.push(b.charIndex); }
+      }
+    };
+  }
+
+  async function run() {
+    /* ================= speech: normal path ================= */
+    section('speech - normal completion');
+    var r = recorder();
+    var p = FR.speech.speak(LONG, r.opts);
+    await sleep(90);
+    var queued = window.__fake._queue.length;
+    eq('a long sentence is split into several utterances', queued > 1, true);
+    window.__drive({ boundariesPerPiece: 2 });
+    await p.catch(function () {});
+    await sleep(20);
+    eq('onstart fires exactly once for the whole sentence', r.ev.start, 1);
+    eq('onend fires exactly once', r.ev.end, 1);
+    eq('no error was reported', r.ev.error, []);
+    eq('boundaries are absolute offsets into the full sentence',
+       r.ev.boundary.every(function (ci) { return ci >= 0 && ci < LONG.length; }), true);
+    eq('boundaries from later pieces are past the first piece',
+       Math.max.apply(null, r.ev.boundary) > 40, true);
+
+    /* ========== speech: a piece fails mid-queue (the critical bug) ========== */
+    section('speech - failure mid-queue');
+    var r2 = recorder();
+    var p2 = FR.speech.speak(LONG, r2.opts);
+    await sleep(90);
+    var total = window.__fake._queue.length;
+    eq('several pieces are queued before the failure', total > 2, true);
+    window.__drive({ failAt: 1 });
+    await p2.catch(function () {});
+    await sleep(20);
+    eq('the error is reported exactly once', r2.ev.error, ['synthesis-failed']);
+    eq('onend does NOT fire for a sentence that failed', r2.ev.end, 0);
+    eq('the remaining pieces are flushed from the queue', window.__fake._queue.length, 0);
+
+    var boundariesAfterFailure = r2.ev.boundary.length;
+    window.__drive({ boundariesPerPiece: 3 });   // anything still queued would speak
+    await sleep(20);
+    eq('no boundary events arrive after the failure',
+       r2.ev.boundary.length, boundariesAfterFailure);
+
+    /* ================= speech: cancel ================= */
+    section('speech - cancel');
+    var r3 = recorder();
+    var p3 = FR.speech.speak(LONG, r3.opts);
+    await sleep(90);
+    FR.speech.cancel();
+    await p3.catch(function () {});
+    await sleep(20);
+    eq('cancel reports no error to the caller', r3.ev.error, []);
+    eq('cancel does not fire onend', r3.ev.end, 0);
+    eq('cancel empties the queue', window.__fake._queue.length, 0);
+
+    /* ================= speech: lagWord ================= */
+    section('speech - one-word lag');
+    var r4 = recorder();
+    r4.opts.lagWord = true;
+    var p4 = FR.speech.speak('Alpha beta gamma delta epsilon zeta.', r4.opts);
+    await sleep(90);
+    window.__drive({ boundariesPerPiece: 3 });
+    await p4.catch(function () {});
+    await sleep(20);
+    eq('lagWord still delivers every word', r4.ev.boundary.length >= 3, true);
+    eq('lagWord flushes the final word at end', r4.ev.end, 1);
+
+    /* ================= speech: rate clamping ================= */
+    section('speech - clamping');
+    eq('rate is clamped below the silent-voice threshold', FR.speech.RATE_MAX <= 2, true);
+    eq('splitForSpeech never exceeds the cap',
+       FR.speech.splitForSpeech(LONG, 80).every(function (p) { return p.end - p.start <= 80; }), true);
+    eq('splitForSpeech covers the whole string',
+       FR.speech.splitForSpeech(LONG, 80).reduce(function (n, p) { return n + (p.end - p.start); }, 0) >= LONG.trim().length - 4,
+       true);
+    eq('a cap below the safe floor is raised, not honoured literally',
+       FR.speech.splitForSpeech(LONG, 10).every(function (p) { return p.end - p.start <= 60; }), true);
+
+    /* ================= settings: the key-wipe bug ================= */
+    section('settings - provider config is not clobbered');
+    await FR.settings.reset();
+    await FR.settings.set({ providerConfig: { openai: { key: 'sk-OPENAI', model: 'gpt-4o-mini' } } });
+    await FR.settings.set({ providerConfig: { libre: { url: 'http://localhost:5000' } } });
+    await FR.settings.set({ providerConfig: { google: { key: 'AIza-GOOGLE' } } });
+    await FR.settings.set({ providerConfig: { mymemory: { email: 'a@b.edu' } } });
+    var s = await FR.settings.get();
+    eq('the OpenAI key survives three later provider saves', s.providerConfig.openai.key, 'sk-OPENAI');
+    eq('the OpenAI model survives', s.providerConfig.openai.model, 'gpt-4o-mini');
+    eq('the LibreTranslate URL survives', s.providerConfig.libre.url, 'http://localhost:5000');
+    eq('the Google key survives', s.providerConfig.google.key, 'AIza-GOOGLE');
+    eq('the MyMemory email survives', s.providerConfig.mymemory.email, 'a@b.edu');
+
+    await FR.settings.set({ rate: 1.5 });
+    var s2 = await FR.settings.get();
+    eq('a top-level save leaves provider keys alone', s2.providerConfig.openai.key, 'sk-OPENAI');
+    eq('the top-level value is stored', s2.rate, 1.5);
+
+    await FR.settings.set({ providerConfig: { openai: { key: 'sk-NEW' } } });
+    var s3 = await FR.settings.get();
+    eq('a provider field can still be updated', s3.providerConfig.openai.key, 'sk-NEW');
+    eq('its sibling field is preserved', s3.providerConfig.openai.model, 'gpt-4o-mini');
+
+    section('settings - listeners');
+    var hits = 0;
+    var h = FR.settings.onChange(function () { hits++; });
+    eq('onChange returns a handle', typeof h, 'function');
+    FR.settings.offChange(h);
+    eq('offChange removes the listener', FR.settings._listeners.indexOf(h), -1);
+
+    /* ================= translate: byte chunking ================= */
+    section('translation - MyMemory byte cap');
+    var enc = new TextEncoder();
+    var bytes = function (x) { return enc.encode(x).length; };
+
+    var prose = 'The effect replicated across every cohort, and the confidence intervals ' +
+                'were narrow enough to rule out the alternative account we had considered. ' +
+                'Participants completed four sessions, each lasting about ninety minutes.';
+    var chunksA = FR.translate.byteChunks(prose, 120);
+    eq('prose is split under the byte cap',
+       chunksA.every(function (c) { return bytes(c) <= 120; }), true);
+    eq('no words are lost when splitting prose',
+       chunksA.join(' ').replace(/\s+/g, ' ').trim().split(' ').length,
+       prose.replace(/\s+/g, ' ').trim().split(' ').length);
+
+    // The case that used to emit an oversize chunk: one token, no whitespace.
+    var giant = 'https://example.org/' + 'a'.repeat(400);
+    var chunksB = FR.translate.byteChunks(giant, 120);
+    eq('a single unspaced token is hard-split under the cap',
+       chunksB.every(function (c) { return bytes(c) <= 120; }), true);
+    eq('the unspaced token is preserved exactly', chunksB.join(''), giant);
+
+    // CJK burns 3 bytes per character, so character counts are no guide.
+    var cjk = '\u6211\u4eec\u4f7f\u7528\u4e86\u5df4\u7279\u6c83\u601d\u6ee4\u6ce2\u5668'.repeat(30);
+    var chunksC = FR.translate.byteChunks(cjk, 120);
+    eq('CJK is chunked by bytes, not characters',
+       chunksC.every(function (c) { return bytes(c) <= 120; }), true);
+    eq('no CJK characters are lost', chunksC.join(''), cjk);
+    eq('no chunk ends inside a surrogate pair',
+       chunksC.every(function (c) { return !/[\uD800-\uDBFF]$/.test(c); }), true);
+
+    eq('short text is returned untouched', FR.translate.byteChunks('Short.', 480), ['Short.']);
+
+    document.getElementById('out').dataset.done = '1';
+
+    document.getElementById('out').innerHTML =
+      (lines.join('\n') + '\n\n==== ' + pass + ' passed, ' + fail + ' failed ====')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/^\[PASS\]/gm, '<span class="p">[PASS]</span>')
+        .replace(/^\[FAIL\]/gm, '<span class="f">[FAIL]</span>');
+    document.title = fail ? ('FAIL ' + fail) : ('PASS ' + pass);
+    window.__result = { pass: pass, fail: fail, lines: lines };
+  }
+
+  run().catch(function (e) {
+    document.getElementById('out').textContent = 'HARNESS ERROR: ' + (e && e.stack || e);
+    window.__result = { pass: pass, fail: fail, lines: lines, error: String(e) };
+    document.title = 'ERROR';
+  });
+})();
+</script>
+</body></html>

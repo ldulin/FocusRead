@@ -60,7 +60,8 @@
         boxes.push(line('right line ' + i + ' of the second column', 320, y, 220));
       }
       var gutter = P.detectColumns(boxes, 600);
-      eq('a two-column page is detected', gutter, 300);
+      eq('a two-column page is detected', gutter !== null, true);
+      eq('the gutter is found between the columns', gutter > 270 && gutter < 320, true);
 
       var ls = P.toLines(boxes, gutter);
       eq('all lines survive column sorting', ls.length, 48);
@@ -68,6 +69,24 @@
          ls.slice(0, 24).every(function (l) { return l.text.indexOf('left') === 0; }) &&
          ls.slice(24).every(function (l) { return l.text.indexOf('right') === 0; }),
          true);
+    })();
+
+    /* ---- word-level text layers: the case that used to break ---- */
+    (function () {
+      // Many PDFs emit one run per WORD. Almost no single word straddles the
+      // page centre, so a straddle-counting heuristic saw two columns here and
+      // read the page in the wrong order.
+      var boxes = [];
+      for (var row = 0; row < 30; row++) {
+        var y = 700 - row * 14;
+        var x = 50;
+        for (var w = 0; w < 9; w++) {
+          boxes.push(line('word' + w, x, y, 48));
+          x += 55;                         // runs straight across the midline
+        }
+      }
+      eq('a word-level single-column page is not split into two',
+         P.detectColumns(boxes, 600), null);
     })();
 
     /* ---- a full-width element defeats column detection, safely ---- */
@@ -89,11 +108,14 @@
         'Signal quality was verified before any analysis ran.'
       ];
       function page(n) {
-        return [
-          { text: 'Journal of Test Results | VOL 12 | ' + (100 + n), y: 780, left: 50, right: 550, h: 8, col: 0, items: [] },
-          { text: BODY[n - 1], y: 700, left: 50, right: 550, h: 10, col: 0, items: [] },
-          { text: String(100 + n), y: 40, left: 300, right: 310, h: 8, col: 0, items: [] }
-        ];
+        return {
+          height: 800,
+          lines: [
+            { text: 'Journal of Test Results | VOL 12 | ' + (100 + n), y: 780, left: 50, right: 550, h: 8, col: 0, items: [] },
+            { text: BODY[n - 1], y: 700, left: 50, right: 550, h: 10, col: 0, items: [] },
+            { text: String(100 + n), y: 40, left: 300, right: 310, h: 8, col: 0, items: [] }
+          ]
+        };
       }
       var heads = P.findRunningHeads([page(1), page(2), page(3), page(4)]);
       eq('a repeated running head is detected',
@@ -117,6 +139,54 @@
       eq('a bare page number is recognised', P.PAGE_NUMBER.test('  12  '), true);
       eq('page N of M is recognised', P.PAGE_NUMBER.test('3 of 12'), true);
       eq('real text is not a page number', P.PAGE_NUMBER.test('12 subjects'), false);
+    })();
+
+    /* ---- a repeated caption that MOVES is not a running head ---- */
+    (function () {
+      // Digit normalisation makes "Table 1" and "Table 2" the same key. Without
+      // checking that the line stays in the same place, a caption drifting down
+      // the page would be deleted as furniture.
+      function page(n, y) {
+        return {
+          height: 800,
+          lines: [
+            { text: 'Table ' + n, y: y, left: 50, right: 160, h: 9, col: 0, items: [] },
+            { text: 'Body prose unique to page ' + 'abcd'[n - 1], y: 400, left: 50, right: 550, h: 10, col: 0, items: [] }
+          ]
+        };
+      }
+      var heads = P.findRunningHeads([page(1, 780), page(2, 120), page(3, 770), page(4, 60)]);
+      eq('a caption that moves around the page is not furniture',
+         !!heads[P.normaliseForRepeat('Table 1')], false);
+
+      var fixed = P.findRunningHeads([page(1, 780), page(2, 779), page(3, 781), page(4, 780)]);
+      eq('the same text pinned to the same place IS furniture',
+         !!fixed[P.normaliseForRepeat('Table 1')], true);
+    })();
+
+    /* ---- paragraphs cut by a column or page break ---- */
+    (function () {
+      var blocks = [
+        { type: 'p', text: 'The measured response increased steadily until it', brokeColumn: false },
+        { type: 'p', text: 'reached a plateau after ten trials.', brokeColumn: true },
+        { type: 'p', text: 'A new paragraph begins here.', brokeColumn: false }
+      ];
+      var merged = P.mergeContinuations(blocks);
+      eq('a paragraph split across a column break is rejoined', merged.length, 2);
+      eq('the rejoined text reads continuously', merged[0].text,
+         'The measured response increased steadily until it reached a plateau after ten trials.');
+
+      var headed = P.mergeContinuations([
+        { type: 'p', text: 'Ends without punctuation', brokeColumn: false },
+        { type: 'h', text: 'Discussion', brokeColumn: true }
+      ]);
+      eq('a heading is never merged into the paragraph before it', headed.length, 2);
+
+      var finished = P.mergeContinuations([
+        { type: 'p', text: 'This paragraph is complete.', brokeColumn: false },
+        { type: 'p', text: 'lowercase start but previous was finished', brokeColumn: true }
+      ]);
+      eq('a finished sentence is not merged with what follows', finished.length, 2);
     })();
 
     /* ---- headings ---- */

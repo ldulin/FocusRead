@@ -103,6 +103,11 @@
     }
   });
 
+  // Leaving a page should release the on-device translator too.
+  root.addEventListener('pagehide', function () {
+    if (FR.translate && FR.translate.builtinDestroy) FR.translate.builtinDestroy();
+  });
+
   // Auto-activate only where the reader has explicitly asked for it.
   FR.settings.get().then(function (s) {
     var host = location.hostname;

@@ -112,12 +112,14 @@
 
   /* ------------------------------------------------------------------ */
 
-  function UI(actions) {
+  function UI(actions, opts) {
     this.actions = actions || {};
+    this.opts = opts || {};
     this.host = null;
     this.shadow = null;
     this._toastTimer = null;
     this._popPinned = false;
+    this._onWindowResize = null;
   }
 
   UI.prototype.mount = function () {
@@ -149,8 +151,8 @@
         '<button data-act="rate" class="rate" title="Reading speed">1.0x</button>' +
         '<select data-role="voice" title="Voice"></select>' +
         '<span class="sep"></span>' +
-        '<button data-act="focus" title="Focus mode (F)" aria-label="Focus mode">' + icon('focus') + '</button>' +
-        '<button data-act="bilingual" title="Show translation under every sentence (B)" aria-label="Bilingual mode">' + icon('lang') + '</button>' +
+        '<button data-act="focus" title="Focus mode (F)" aria-label="Focus mode" aria-pressed="false">' + icon('focus') + '</button>' +
+        '<button data-act="bilingual" title="Show translation under every sentence (B)" aria-label="Bilingual mode" aria-pressed="false">' + icon('lang') + '</button>' +
         '<button data-act="translate" title="Translate the current sentence (T)" aria-label="Translate sentence">' + icon('translate') + '</button>' +
         '<span class="sep"></span>' +
         '<button data-act="settings" title="Settings" aria-label="Settings">' + icon('settings') + '</button>' +
@@ -162,7 +164,7 @@
     var pop = el(
       '<div class="pop" hidden style="pointer-events:auto">' +
         '<div class="src" data-role="src"></div>' +
-        '<div class="out" data-role="out"></div>' +
+        '<div class="out" data-role="out" role="status" aria-live="polite"></div>' +
         '<div class="acts">' +
           '<button data-act="pop-speak-src" title="Read the original aloud">' + icon('speak', 16) + '</button>' +
           '<button data-act="pop-speak-out" title="Read the translation aloud">' + icon('speak', 16) + icon('lang', 13) + '</button>' +
@@ -175,7 +177,11 @@
     );
     this.shadow.appendChild(pop);
 
-    this.shadow.appendChild(el('<div class="toast" hidden></div>'));
+    // Announced to assistive tech. Errors and status were otherwise delivered
+    // as a silently-appearing div that a screen reader never mentions.
+    this.shadow.appendChild(el(
+      '<div class="toast" hidden role="status" aria-live="polite" aria-atomic="true"></div>'
+    ));
 
     // One delegated listener for every button in the shadow tree.
     this.shadow.addEventListener('click', function (e) {
@@ -194,6 +200,7 @@
     // Stop the page from seeing keystrokes aimed at our own controls.
     this.shadow.addEventListener('keydown', function (e) { e.stopPropagation(); });
 
+    this._wireToolbarKeys(bar);
     this._makeDraggable(bar, this.shadow.querySelector('.grip'));
 
     var parent = document.body || document.documentElement;
@@ -205,6 +212,38 @@
     this.spacer.className = 'fr-ignore';
     this.spacer.setAttribute('aria-hidden', 'true');
     parent.appendChild(this.spacer);
+  };
+
+  /**
+   * role="toolbar" promises arrow-key navigation between controls and a single
+   * tab stop. Claiming the role without implementing it is worse than not
+   * claiming it, so implement it: roving tabindex plus Left/Right/Home/End.
+   */
+  UI.prototype._wireToolbarKeys = function (bar) {
+    var self = this;
+    function items() {
+      return Array.prototype.filter.call(
+        bar.querySelectorAll('button, select'),
+        function (n) { return !n.disabled; });
+    }
+    function focusAt(list, i) {
+      var n = list.length;
+      var target = list[((i % n) + n) % n];
+      list.forEach(function (el2) { el2.tabIndex = el2 === target ? 0 : -1; });
+      target.focus();
+    }
+    var all = items();
+    all.forEach(function (el2, i) { el2.tabIndex = i === 0 ? 0 : -1; });
+
+    bar.addEventListener('keydown', function (e) {
+      var list = items();
+      var i = list.indexOf(e.target);
+      if (i === -1) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); focusAt(list, i + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); focusAt(list, i - 1); }
+      else if (e.key === 'Home') { e.preventDefault(); focusAt(list, 0); }
+      else if (e.key === 'End') { e.preventDefault(); focusAt(list, list.length - 1); }
+    });
   };
 
   UI.prototype._makeDraggable = function (bar, grip) {
@@ -229,12 +268,40 @@
       bar.style.top = Math.max(4, Math.min(root.innerHeight - h - 4, e.clientY - dy)) + 'px';
     });
     grip.addEventListener('pointerup', function (e) {
+      if (!dragging) return;
       dragging = false;
       try { grip.releasePointerCapture(e.pointerId); } catch (err) { /* noop */ }
       if (self.actions.moved) {
-        self.actions.moved({ left: bar.style.left, top: bar.style.top });
+        self.actions.moved({ left: parseFloat(bar.style.left), top: parseFloat(bar.style.top) });
       }
     });
+
+    // Restore a previously dragged position.
+    var saved = this.opts.position;
+    if (saved && isFinite(saved.left) && isFinite(saved.top)) {
+      bar.style.transform = 'none';
+      bar.style.bottom = 'auto';
+      bar.style.left = saved.left + 'px';
+      bar.style.top = saved.top + 'px';
+      this._clampBar();
+    }
+
+    // A dragged bar is positioned in viewport coordinates, so shrinking the
+    // window or rotating a tablet can strand it completely off-screen with no
+    // way to get it back.
+    this._onWindowResize = function () { self._clampBar(); };
+    root.addEventListener('resize', this._onWindowResize);
+  };
+
+  UI.prototype._clampBar = function () {
+    var bar = this.$('.bar');
+    if (!bar || bar.style.top === '' || bar.style.top === 'auto') return;
+    var w = bar.offsetWidth, h = bar.offsetHeight;
+    var left = parseFloat(bar.style.left);
+    var top = parseFloat(bar.style.top);
+    if (!isFinite(left) || !isFinite(top)) return;
+    bar.style.left = Math.max(4, Math.min(root.innerWidth - w - 4, left)) + 'px';
+    bar.style.top = Math.max(4, Math.min(root.innerHeight - h - 4, top)) + 'px';
   };
 
   UI.prototype.$ = function (sel) { return this.shadow && this.shadow.querySelector(sel); };
@@ -259,8 +326,21 @@
       q('[data-act="next"]').toggleAttribute('disabled', !(total && idx < total - 1));
     }
     if (s.rate !== undefined) q('[data-act="rate"]').textContent = Number(s.rate).toFixed(2).replace(/0$/, '') + 'x';
-    if (s.focus !== undefined) q('[data-act="focus"]').classList.toggle('on', !!s.focus);
-    if (s.bilingual !== undefined) q('[data-act="bilingual"]').classList.toggle('on', !!s.bilingual);
+    // State must not be conveyed by colour alone: mirror it into aria-pressed
+    // so a screen reader announces on/off, and into the title so a tooltip
+    // says which it is.
+    if (s.focus !== undefined) {
+      var fb = q('[data-act="focus"]');
+      fb.classList.toggle('on', !!s.focus);
+      fb.setAttribute('aria-pressed', s.focus ? 'true' : 'false');
+      fb.title = 'Focus mode (F) - ' + (s.focus ? 'on' : 'off');
+    }
+    if (s.bilingual !== undefined) {
+      var bb = q('[data-act="bilingual"]');
+      bb.classList.toggle('on', !!s.bilingual);
+      bb.setAttribute('aria-pressed', s.bilingual ? 'true' : 'false');
+      bb.title = 'Translation under every sentence (B) - ' + (s.bilingual ? 'on' : 'off');
+    }
     if (s.hidden !== undefined) q('.bar').toggleAttribute('hidden', !!s.hidden);
   };
 
@@ -346,7 +426,13 @@
     t.hidden = false;
     clearTimeout(this._toastTimer);
     var self = this;
-    this._toastTimer = setTimeout(function () { self.$('.toast').hidden = true; }, ms || 2600);
+    this._toastTimer = setTimeout(function () {
+      self._toastTimer = null;
+      // destroy() may have run in the meantime; $() would return null and the
+      // old code threw inside a timer, where nothing catches it.
+      var el2 = self.$('.toast');
+      if (el2) el2.hidden = true;
+    }, ms || 2600);
   };
 
   /* ---------- reading ruler ---------- */
@@ -377,6 +463,12 @@
   };
 
   UI.prototype.destroy = function () {
+    clearTimeout(this._toastTimer);
+    this._toastTimer = null;
+    if (this._onWindowResize) {
+      root.removeEventListener('resize', this._onWindowResize);
+      this._onWindowResize = null;
+    }
     this.updateRuler(null);
     if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
     if (this.spacer && this.spacer.parentNode) this.spacer.parentNode.removeChild(this.spacer);

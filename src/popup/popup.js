@@ -24,12 +24,25 @@
 
   function checkTab() {
     return send({ type: 'FR_STATUS_ACTIVE_TAB' }).then(function (r) {
-      if (!r || r.error || r.injectable) return;
+      if (!r || r.error) return;
+
+      // A PDF URL passes the http(s) test, so it looks injectable - but Chrome
+      // is rendering it in its own viewer, which no content script can reach.
+      // Checking this only inside the !injectable branch meant the one hint
+      // that explains the commonest confusion could never be shown.
+      if (/\.pdf(\?|#|$)/i.test(r.url || '')) {
+        $('start').disabled = true;
+        $('pageNote').hidden = false;
+        $('pageNote').textContent =
+          'Chrome shows PDFs in its own viewer, which extensions cannot read. ' +
+          'Use "Open a PDF or Word file" below to read this one in FocusRead.';
+        return;
+      }
+
+      if (r.injectable) return;
       $('start').disabled = true;
       $('pageNote').hidden = false;
-      $('pageNote').textContent = /\.pdf(\?|#|$)/i.test(r.url || '')
-        ? 'Chrome is showing this PDF in its own viewer, which extensions cannot read. Use "Open a PDF or Word file" below.'
-        : 'FocusRead cannot run on browser pages like this one.';
+      $('pageNote').textContent = 'FocusRead cannot run on browser pages like this one.';
     });
   }
 
@@ -128,7 +141,23 @@
 
   function bind() {
     $('start').addEventListener('click', function () {
-      send({ type: 'FR_TOGGLE_ACTIVE_TAB' }).then(function () { window.close(); });
+      var btn = $('start');
+      btn.disabled = true;
+      btn.textContent = 'Starting...';
+      send({ type: 'FR_TOGGLE_ACTIVE_TAB' }).then(function (r) {
+        // Closing regardless meant a refused injection - a PDF viewer, a
+        // chrome:// page, a site that blocks scripting - looked like a no-op.
+        if (r && (r.error || r.error === '')) {
+          btn.disabled = false;
+          btn.textContent = 'Start reading this page';
+          $('pageNote').hidden = false;
+          $('pageNote').textContent = r.error === 'unsupported-page'
+            ? 'FocusRead cannot run on this page.'
+            : 'Could not start: ' + r.error;
+          return;
+        }
+        window.close();
+      });
     });
     $('openDoc').addEventListener('click', function () {
       send({ type: 'FR_OPEN_READER' }).then(function () { window.close(); });

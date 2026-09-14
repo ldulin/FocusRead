@@ -204,6 +204,36 @@
     return patch;
   }
 
+  /**
+   * Ask for an optional permission.
+   *
+   * Must be called synchronously from inside a user-gesture handler:
+   * chrome.permissions.request() requires transient activation, which is why
+   * routing it through the service worker (as this used to) always failed.
+   */
+  function requestPermission(request) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.permissions.request(request, function (granted) {
+          resolve(!!granted && !chrome.runtime.lastError);
+        });
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  }
+
+  /** "https://api.example.com/v1" -> "https://api.example.com/*" */
+  function originPattern(url) {
+    try {
+      var u = new URL(String(url));
+      if (!/^https?:$/.test(u.protocol)) return null;
+      return u.protocol + '//' + u.host + '/*';
+    } catch (e) {
+      return null;
+    }
+  }
+
   var savedTimer = null;
   function flashSaved() {
     $('saved').hidden = false;
@@ -240,6 +270,12 @@
       label.appendChild(h);
     }
 
+    var msg = document.createElement('span');
+    msg.className = 'fieldnote';
+    msg.dataset.note = f.key;
+    msg.hidden = true;
+    label.appendChild(msg);
+
     var control = document.createElement('div');
     control.className = 'control';
     control.appendChild(buildControl(f));
@@ -249,6 +285,14 @@
     return row;
   }
 
+  /** Show (or clear) an inline message under one field. */
+  function note(key, text) {
+    var el2 = document.querySelector('[data-note="' + CSS.escape(key) + '"]');
+    if (!el2) return;
+    el2.textContent = text || '';
+    el2.hidden = !text;
+  }
+
   function buildControl(f) {
     var v = getVal(settings, f.key);
 
@@ -256,7 +300,22 @@
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = !!v;
-      cb.addEventListener('change', function () { save(f.key, cb.checked); });
+      cb.addEventListener('change', function () {
+        // Running on every page without being asked needs access to every page.
+        if (f.key === 'autoActivate' && cb.checked) {
+          requestPermission({ origins: ['*://*/*'] }).then(function (granted) {
+            if (!granted) {
+              cb.checked = false;
+              note(f.key, 'FocusRead needs access to all sites to start by itself. Nothing was changed.');
+              return;
+            }
+            note(f.key, '');
+            save(f.key, true);
+          });
+          return;
+        }
+        save(f.key, cb.checked);
+      });
       return cb;
     }
 
@@ -316,9 +375,19 @@
       ta.value = (v || []).join('\n');
       ta.placeholder = 'arxiv.org';
       ta.addEventListener('change', function () {
-        var hosts = ta.value.split('\n').map(function (x) { return x.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, ''); })
-                             .filter(Boolean);
-        save(f.key, hosts);
+        var hosts = ta.value.split('\n')
+          .map(function (x) { return x.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, ''); })
+          .filter(Boolean);
+        if (!hosts.length) { note(f.key, ''); return save(f.key, []); }
+        requestPermission({ origins: hosts.map(function (h) { return '*://' + h + '/*'; }) })
+          .then(function (granted) {
+            if (!granted) {
+              note(f.key, 'Access to those sites was declined, so FocusRead will not start on them by itself.');
+              return;
+            }
+            note(f.key, '');
+            save(f.key, hosts);
+          });
       });
       return ta;
     }
@@ -329,13 +398,25 @@
       pi.checked = !!v;
       pi.addEventListener('change', function () {
         var want = pi.checked;
-        chrome.runtime.sendMessage({ type: 'FR_SET_PDF_INTERCEPT', enabled: want }, function (r) {
-          if (!r || !r.ok) {
-            pi.checked = !want;
-            alert((r && r.error) ? ('Could not change this: ' + r.error) : 'Could not change this setting.');
+        var step = want
+          ? requestPermission({ permissions: ['declarativeNetRequest'], origins: ['*://*/*'] })
+          : Promise.resolve(true);
+
+        step.then(function (granted) {
+          if (want && !granted) {
+            pi.checked = false;
+            note(f.key, 'Permission was declined, so PDF links will keep opening in Chrome\'s viewer.');
             return;
           }
-          flashSaved();
+          chrome.runtime.sendMessage({ type: 'FR_SET_PDF_INTERCEPT', enabled: want }, function (r) {
+            if (!r || !r.ok) {
+              pi.checked = !want;
+              note(f.key, (r && r.error) ? ('Could not change this: ' + r.error) : 'Could not change this setting.');
+              return;
+            }
+            note(f.key, '');
+            flashSaved();
+          });
         });
       });
       return pi;
@@ -346,7 +427,28 @@
     t.type = f.type === 'password' ? 'password' : 'text';
     t.value = v == null ? '' : String(v);
     t.spellcheck = false;
-    t.addEventListener('change', function () { save(f.key, t.value.trim()); });
+    t.addEventListener('change', function () {
+      var val = t.value.trim();
+      // A user-supplied endpoint is not in host_permissions and cannot be -
+      // we do not know it at build time. Ask for exactly that origin.
+      if (/\.url$/.test(f.key) && val) {
+        var pattern = originPattern(val);
+        if (!pattern) {
+          note(f.key, 'That does not look like an http:// or https:// address.');
+          return;
+        }
+        requestPermission({ origins: [pattern] }).then(function (granted) {
+          if (!granted) {
+            note(f.key, 'FocusRead needs permission to contact ' + pattern + '. It was declined, so this was not saved.');
+            return;
+          }
+          note(f.key, '');
+          save(f.key, val);
+        });
+        return;
+      }
+      save(f.key, val);
+    });
     return t;
   }
 

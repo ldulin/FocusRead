@@ -15,6 +15,7 @@
     autoActivate: false,          // run on every page load
     autoActivateHosts: [],        // ...or only on these hostnames
     shortcutsEnabled: true,
+    toolbarPos: null,             // {left, top} in px once the reader drags it
 
     /* --- speech --- */
     voiceURI: '',                 // '' = browser default for the page language
@@ -117,14 +118,31 @@
     });
   }
 
+  /**
+   * Write a partial update.
+   *
+   * providerConfig has to be merged a level deeper than everything else.
+   * Object.assign is shallow, so a patch of {providerConfig:{google:{key}}} -
+   * which is exactly what the options page builds for every dotted field -
+   * would REPLACE the whole providerConfig object. merge() then rebuilds the
+   * missing providers from DEFAULTS, quietly erasing every other provider's
+   * API key. The options page does not re-read its inputs after a save, so the
+   * erased keys stay on screen and the loss is invisible until translation
+   * starts failing.
+   */
   function set(patch) {
     return get().then(function (cur) {
-      var next = merge(Object.assign({}, cur, patch));
+      var incoming = Object.assign({}, cur, patch);
+
       if (patch.providerConfig) {
+        incoming.providerConfig = Object.assign({}, cur.providerConfig);
         Object.keys(patch.providerConfig).forEach(function (p) {
-          next.providerConfig[p] = Object.assign({}, cur.providerConfig[p], patch.providerConfig[p]);
+          incoming.providerConfig[p] =
+            Object.assign({}, cur.providerConfig[p], patch.providerConfig[p]);
         });
       }
+
+      var next = merge(incoming);
       cached = next;
       return new Promise(function (resolve) {
         chrome.storage.local.set({ settings: next }, function () { resolve(next); });
@@ -159,6 +177,13 @@
     reset: reset,
     peek: function () { return cached; },
     _listeners: [],
-    onChange: function (fn) { FR.settings._listeners.push(fn); }
+    onChange: function (fn) {
+      FR.settings._listeners.push(fn);
+      return fn;                       // hand back a handle for offChange
+    },
+    offChange: function (fn) {
+      var i = FR.settings._listeners.indexOf(fn);
+      if (i !== -1) FR.settings._listeners.splice(i, 1);
+    }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

@@ -25,6 +25,34 @@
 
   var RATES = [0.6, 0.75, 0.9, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
 
+  // A raw exception string under a sentence tells the reader nothing they can
+  // act on. Map what we know to plain language, and keep the detail in the
+  // console for whoever is debugging.
+  var ERROR_TEXT = {
+    quota: 'Daily translation limit reached. Add your email in settings to raise it, or switch provider.',
+    auth: 'The translation service rejected your API key. Check it in settings.',
+    config: 'This translation engine is not set up yet. Open settings to finish it.',
+    relay: 'FocusRead could not reach its background service. Try reloading the page.',
+    'builtin-unavailable': 'Chrome\'s built-in translator is not available here. Pick another engine in settings.',
+    'builtin-in-worker': 'Chrome\'s built-in translator is not available here. Pick another engine in settings.',
+    'builtin-pair': 'Chrome cannot translate this language pair on this device. Pick another engine in settings.',
+    'builtin-needs-gesture': 'Chrome needs to download a language pack. Open the FocusRead popup and click Download.',
+    'builtin-timeout': 'The translator stopped responding. Check your connection, or pick another engine.',
+    provider: 'The translation service returned an error. Try again, or switch provider in settings.'
+  };
+
+  function friendlyError(result) {
+    if (!result) return 'Translation failed.';
+    if (result.error && !result.code) return String(result.error);
+    var msg = ERROR_TEXT[result.code];
+    if (msg) {
+      if (result.error) console.warn('[FocusRead]', result.code, result.error);
+      return msg;
+    }
+    console.warn('[FocusRead] translation failed', result);
+    return 'Translation failed. ' + (result.error || '');
+  }
+
   function Controller(opts) {
     opts = opts || {};
     this.rootEl = opts.root || document.body;
@@ -39,6 +67,7 @@
     this._io = null;
     this._boundKeys = null;
     this._rulerRaf = null;
+    this._playGeneration = 0;    // invalidates in-flight auto-advance chains
   }
 
   /* ------------------------------------------------------------------ *
@@ -57,7 +86,7 @@
         clauseMaxLen: s.clauseMaxLen
       });
 
-      self.ui = new FR.UI(self._actions());
+      self.ui = new FR.UI(self._actions(), { position: s.toolbarPos });
       self.ui.mount();
 
       document.documentElement.classList.add('fr-active');
@@ -70,6 +99,14 @@
 
       self.engine.on('progress', function (p) {
         if (p.total > 20) self.ui.setProgress(p.done / p.total);
+      });
+
+      // A live page can grow after the first pass; the toolbar count and the
+      // bilingual observer both have to follow.
+      self.engine.on('scanned', function (info) {
+        if (!self.active) return;
+        self.ui.setState({ total: info.count });
+        if (self.settings.bilingual) self._observeForBilingual();
       });
 
       return self.engine.scan().then(function (count) {
@@ -85,7 +122,14 @@
           if (s.bilingual) self.setBilingual(true);
         }
         self._wireEvents();
-        FR.settings.onChange(function (next) { self.settings = next; self.applyVisuals(); });
+        // Registered per activate(), so it MUST be removed on deactivate -
+        // otherwise every activation leaves another listener behind that keeps
+        // restyling a page the reader has already switched off.
+        self._settingsListener = FR.settings.onChange(function (next) {
+          if (!self.active) return;
+          self.settings = next;
+          self.applyVisuals();
+        });
         return self;
       });
     });
@@ -93,16 +137,23 @@
 
   Controller.prototype.deactivate = function () {
     if (!this.active) return;
+    this.active = false;                 // stop late callbacks touching the UI
     this.stop();
+    if (this._settingsListener) {
+      FR.settings.offChange(this._settingsListener);
+      this._settingsListener = null;
+    }
     this._unwireEvents();
     if (this._io) { this._io.disconnect(); this._io = null; }
     if (this.engine) this.engine.detach();
     if (this.ui) this.ui.destroy();
+    // Each Translator instance holds on-device model resources. Leaking one per
+    // navigation adds up over a long reading session.
+    if (FR.translate && FR.translate.builtinDestroy) FR.translate.builtinDestroy();
     var html = document.documentElement;
     html.classList.remove('fr-active', 'fr-focus-spotlight', 'fr-focus-ruler', 'fr-typo', 'fr-width',
       'fr-hl-underline', 'fr-hl-block', 'fr-hl-box', 'fr-hl-none',
       'fr-tint-sepia', 'fr-tint-gray', 'fr-tint-dark');
-    this.active = false;
     this.engine = null;
     this.ui = null;
   };
@@ -160,6 +211,13 @@
     if (!rec) return;
     var s = this.settings;
 
+    // `playing` alone is not enough to stop a stale chain: clicking a new
+    // sentence sets playing=false then true again within the same tick, so the
+    // old sentence's onend still sees playing===true and advances from ITS
+    // index, and two chains then race, each undoing the other's highlight.
+    var generation = ++this._playGeneration;
+    var mine = function () { return self.active && self.playing && self._playGeneration === generation; };
+
     this.playing = true;
     this.ui.setState({ playing: true, index: rec.i, total: this.engine.count() });
 
@@ -173,17 +231,18 @@
       localOnly: s.localVoicesOnly,
       lagWord: s.wordHighlightLag,
       onboundary: function (b) {
+        if (!mine()) return;
         if (s.highlightWords) self.engine.highlightWord(rec.i, b.charIndex, b.charLength);
       },
       onend: function () {
+        if (!mine()) return;
         self.engine.clearWord();
-        if (!self.playing) return;
 
         var advance = function () {
-          if (!self.playing) return;
+          if (!mine()) return;
           if (s.autoAdvance && self.engine.index < self.engine.count() - 1) {
             var go = function () {
-              if (!self.playing) return;
+              if (!mine()) return;
               self.engine.setCurrent(self.engine.index + 1, { scroll: s.scrollFollow });
               self.speakCurrent();
             };
@@ -199,12 +258,13 @@
         else advance();
       },
       onerror: function (e) {
+        if (!self.active) return;
         self.playing = false;
-        self.engine.clearWord();
+        if (self.engine) self.engine.clearWord();
         self.ui.setState({ playing: false });
         self.ui.toast(e.error === 'unsupported'
           ? 'This browser has no speech engine available.'
-          : 'Speech stopped: ' + e.error);
+          : 'Speech stopped (' + e.error + '). Press play to continue.', 4000);
       }
     }).catch(function () { /* reported through onerror */ });
   };
@@ -217,9 +277,12 @@
   Controller.prototype._speakTranslation = function (rec) {
     var self = this;
     var s = this.settings;
+    // Only render it if bilingual mode is already showing translations;
+    // otherwise "read the translation aloud" would silently also switch on
+    // inline translation, which is a different feature.
     var have = rec.translation
       ? Promise.resolve(rec.translation)
-      : this.translateSentence(rec.i);
+      : this.translateSentence(rec.i, !!s.bilingual);
 
     return have.then(function (text) {
       if (!text || !self.playing) return;
@@ -255,6 +318,7 @@
   };
 
   Controller.prototype.stop = function () {
+    this._playGeneration++;
     this.playing = false;
     FR.speech.cancel();
     if (this.engine) this.engine.clearWord();
@@ -270,6 +334,7 @@
   Controller.prototype.step = function (delta) {
     if (!this.engine || !this.engine.count()) return;
     var wasPlaying = this.playing;
+    this._playGeneration++;
     FR.speech.cancel();
     this.playing = false;
     var target = Math.max(0, Math.min(this.engine.count() - 1, this.engine.index + delta));
@@ -327,23 +392,39 @@
     });
   };
 
-  Controller.prototype.translateSentence = function (i) {
+  /**
+   * @param {number} i
+   * @param {boolean} [render=true] false to fetch without putting it on screen -
+   *   used when the translation is only going to be spoken.
+   */
+  Controller.prototype.translateSentence = function (i, render) {
     var self = this;
+    var show = render !== false;
     var rec = this.engine.get(i);
     if (!rec) return Promise.resolve(null);
-    if (rec.translation) { this.engine.setTranslation(i, rec.translation); return Promise.resolve(rec.translation); }
 
-    this.engine.setTranslation(i, 'translating...');
-    if (rec.transEl) rec.transEl.classList.add('fr-t-pending');
+    if (rec.translation) {
+      if (show) this.engine.setTranslation(i, rec.translation);
+      return Promise.resolve(rec.translation);
+    }
+
+    if (show) {
+      this.engine.setTranslation(i, 'translating...');
+      if (rec.transEl) rec.transEl.classList.add('fr-t-pending');
+    }
 
     return this.translate([rec.text]).then(function (res) {
-      var r = res[0] || { ok: false, error: 'No result' };
-      if (rec.transEl) {
-        rec.transEl.classList.remove('fr-t-pending');
-        rec.transEl.classList.toggle('fr-t-error', !r.ok);
-      }
-      self.engine.setTranslation(i, r.ok ? r.text : r.error);
+      var r = res[0] || { ok: false, code: 'provider', error: 'No result' };
       if (!r.ok) rec.translation = null;
+      if (show) {
+        if (rec.transEl) {
+          rec.transEl.classList.remove('fr-t-pending');
+          rec.transEl.classList.toggle('fr-t-error', !r.ok);
+        }
+        self.engine.setTranslation(i, r.ok ? r.text : friendlyError(r));
+      } else if (!r.ok) {
+        self._reportProviderError(r);
+      }
       return r.ok ? r.text : null;
     });
   };
@@ -384,8 +465,18 @@
       });
     }, { rootMargin: '250px 0px' });
 
+    this._observeForBilingual();
+  };
+
+  /** Observe every sentence that is not being watched yet. */
+  Controller.prototype._observeForBilingual = function () {
+    var self = this;
+    if (!this._io || !this.engine) return;
     this.engine.sentences.forEach(function (rec) {
-      if (rec.marks[0]) self._io.observe(rec.marks[0]);
+      var mark = rec.marks[0];
+      if (!mark || mark.__frObserved) return;
+      mark.__frObserved = true;
+      self._io.observe(mark);
     });
   };
 
@@ -398,12 +489,19 @@
 
   Controller.prototype._flushBilingual = function () {
     var self = this;
+    if (!this.active || !this.engine) return;
     var batch = this._pendingBilingual.splice(0, 20);
     if (!batch.length) return;
 
     var recs = batch.map(function (i) { return self.engine.get(i); }).filter(Boolean);
     var fresh = recs.filter(function (r) { return !r.translation; });
-    if (!fresh.length) return;
+    if (!fresh.length) {
+      // Everything in this batch was already translated. Keep draining rather
+      // than returning, or the rest of the queue is stranded until the reader
+      // happens to scroll something new into view.
+      if (this._pendingBilingual.length) this._flushBilingual();
+      return;
+    }
 
     fresh.forEach(function (r) {
       self.engine.setTranslation(r.i, 'translating...');
@@ -418,7 +516,7 @@
           r.transEl.classList.remove('fr-t-pending');
           r.transEl.classList.toggle('fr-t-error', !out.ok);
         }
-        self.engine.setTranslation(r.i, out.ok ? out.text : out.error);
+        self.engine.setTranslation(r.i, out.ok ? out.text : friendlyError(out));
         if (!out.ok) { r.translation = null; firstError = firstError || out; }
       });
       if (firstError) self._reportProviderError(firstError);
@@ -431,7 +529,7 @@
     this._errorToasted = true;
     var self = this;
     setTimeout(function () { self._errorToasted = false; }, 8000);
-    this.ui.toast(err.error || 'Translation failed', 5000);
+    this.ui.toast(friendlyError(err), 5500);
   };
 
   /** Translate every sentence at once, with a progress bar. */
@@ -458,7 +556,7 @@
               r.transEl.classList.remove('fr-t-pending');
               r.transEl.classList.toggle('fr-t-error', !out.ok);
             }
-            self.engine.setTranslation(r.i, out.ok ? out.text : out.error);
+            self.engine.setTranslation(r.i, out.ok ? out.text : friendlyError(out));
             if (!out.ok) r.translation = null;
           });
           done += group.length;
@@ -505,7 +603,7 @@
       self._lastTranslation = r.ok ? r.text : '';
       self.ui.showPopup(rect, {
         source: text.length > 220 ? text.slice(0, 220) + '...' : text,
-        text: r.ok ? r.text : r.error,
+        text: r.ok ? r.text : friendlyError(r),
         error: !r.ok,
         provider: r.ok ? s.provider : ''
       });
@@ -552,6 +650,11 @@
         if (self.engine.index >= 0) self.translateSentence(self.engine.index);
       },
       settings: function () { chrome.runtime.sendMessage({ type: 'FR_OPEN_OPTIONS' }); },
+      moved: function (pos) {
+        if (!pos || !isFinite(pos.left) || !isFinite(pos.top)) return;
+        self.settings.toolbarPos = pos;
+        FR.settings.set({ toolbarPos: pos });
+      },
       close: function () { self.deactivate(); },
       'pop-close': function () { self.ui.hidePopup(); },
       'pop-copy': function () {
@@ -562,17 +665,27 @@
           function () { self.ui.toast('Could not copy'); }
         );
       },
+      // Speaking a selection takes over the single speech engine, so the
+      // reading session has to be stopped properly first - otherwise the
+      // toolbar still shows Play and the engine's auto-advance is left armed.
       'pop-speak-src': function () {
+        self.stop();
         FR.speech.speak(self._lastSelection || '', {
           rate: self.settings.rate, lang: self.docLang(),
-          maxChars: self.settings.maxUtteranceChars, localOnly: self.settings.localVoicesOnly
-        });
+          maxChars: self.settings.maxUtteranceChars, localOnly: self.settings.localVoicesOnly,
+          onerror: function (err) { self.ui.toast('Could not read that aloud (' + err.error + ').'); }
+        }).catch(function () { /* reported above */ });
       },
       'pop-speak-out': function () {
+        self.stop();
         FR.speech.speak(self._lastTranslation || '', {
           rate: self.settings.rate, lang: self.settings.targetLang,
-          voiceURI: '', maxChars: self.settings.maxUtteranceChars, localOnly: false
-        });
+          voiceURI: '', maxChars: self.settings.maxUtteranceChars, localOnly: false,
+          onerror: function () {
+            self.ui.toast('No ' + FR.translate.langName(self.settings.targetLang) +
+                          ' voice is installed on this computer.', 4500);
+          }
+        }).catch(function () { /* reported above */ });
       }
     };
   };
@@ -643,14 +756,45 @@
     });
   };
 
-  var TYPING = { INPUT: 1, TEXTAREA: 1, SELECT: 1 };
+  var TYPING = { INPUT: 1, TEXTAREA: 1, SELECT: 1, OPTION: 1 };
+  var ACTIVATABLE = { BUTTON: 1, A: 1, SUMMARY: 1, DETAILS: 1, LABEL: 1, VIDEO: 1, AUDIO: 1 };
+  var INTERACTIVE_ROLE = /^(button|link|textbox|searchbox|combobox|listbox|menuitem|menuitemcheckbox|menuitemradio|checkbox|radio|slider|spinbutton|switch|tab|option)$/;
+
+  /**
+   * Would this element normally act on Space or an arrow key itself?
+   *
+   * Getting this wrong is worse than it sounds: Space on a focused button, a
+   * search box inside the page's own shadow DOM, or a custom control with
+   * role="textbox" would all be eaten by the reader.
+   */
+  function isInteractive(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = String(el.tagName || '').toUpperCase();
+    if (TYPING[tag] || ACTIVATABLE[tag]) return true;
+    if (el.isContentEditable) return true;
+    if (el.getAttribute) {
+      var role = el.getAttribute('role');
+      if (role && INTERACTIVE_ROLE.test(role)) return true;
+      if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
+    }
+    return false;
+  }
 
   Controller.prototype._onKey = function (e) {
     if (!this.settings.shortcutsEnabled) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    var t = e.target;
-    if (t && (TYPING[t.tagName] || t.isContentEditable)) return;
-    if (this.ui.containsNode(t)) return;
+
+    // composedPath() sees INTO shadow roots. e.target is retargeted to the
+    // host, so a page that builds its search box in a shadow DOM would look
+    // like a plain <div> and have its typing stolen.
+    var path = (e.composedPath && e.composedPath()) || [e.target];
+
+    for (var i = 0; i < path.length; i++) {
+      var node = path[i];
+      if (node === this.ui.host) return;          // our own controls
+      if (node === document || node === window) break;
+      if (isInteractive(node)) return;
+    }
 
     switch (e.key) {
       case ' ':
@@ -669,9 +813,12 @@
       case 'f': case 'F':
         e.preventDefault(); this._actions().focus(); break;
       case 'Escape':
+        // Deliberately never deactivates. Escape is pressed reflexively to
+        // dismiss things, and losing the whole session - every translation on
+        // the page with it - is far too destructive for a stray keypress.
         if (this.ui.popupVisible()) { e.preventDefault(); this.ui.hidePopup(); }
         else if (this.playing) { e.preventDefault(); this.stop(); }
-        else { this.deactivate(); }
+        else { this.ui.toast('Press Alt+R, or the X on the toolbar, to turn FocusRead off.'); }
         break;
       default: break;
     }

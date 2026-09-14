@@ -105,3 +105,15 @@ kbd {
   nav { gap: 2px; }
   nav button { padding: 6px 10px; }
 }
+
+/* Inline per-field feedback: a declined permission, a malformed URL. */
+.fieldnote {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: color-mix(in srgb, #f5c518 18%, var(--card));
+  border: 1px solid color-mix(in srgb, #f5c518 45%, transparent);
+}

@@ -117,35 +117,47 @@ fr-b {
 }
 
 /* ---- inline translation (bilingual mode) ---- */
+/*
+ * The translation carries its OWN background rather than sitting on the page's.
+ * Colouring it from prefers-color-scheme was wrong: that reports the reader's
+ * OS preference, not the background of the site they are on, so light-blue text
+ * on a dark page (or the reverse) dropped to around 1.5:1 contrast. A tinted
+ * panel plus a colour chosen against that tint is stable on any page.
+ */
 fr-t {
   display: block !important;
-  margin: .25em 0 .55em 0 !important;
-  padding: .1em 0 .1em .7em !important;
-  border-left: 3px solid color-mix(in srgb, var(--fr-hl) 60%, transparent);
+  margin: .3em 0 .6em 0 !important;
+  padding: .35em .6em .35em .7em !important;
+  border-left: 3px solid var(--fr-hl);
+  border-radius: 0 4px 4px 0;
+  background: #eef3f8;
+  color: #1f3b54;
   font-size: calc(1em * var(--fr-bi-scale, .92)) !important;
-  line-height: 1.6 !important;
-  color: #4a6b8a;
+  line-height: 1.65 !important;
   font-family: inherit;
-  opacity: .95;
   text-align: start;
   white-space: normal;
-}
-@supports not (color: color-mix(in srgb, red 50%, blue)) {
-  fr-t { border-left-color: rgba(245, 197, 24, .6); }
+  text-shadow: none !important;
 }
 fr-t:empty { display: none !important; }
 fr-t.fr-t-pending {
-  color: #8a8a8a;
+  color: #5a6673;
   font-style: italic;
 }
 fr-t.fr-t-error {
-  color: #b3261e;
+  background: #fdecea;
+  color: #8c1d18;
   border-left-color: #b3261e;
-  font-style: italic;
+  font-style: normal;
+}
+
+/* Only follow the OS theme where WE own the surrounding surface. */
+html.fr-tint-dark fr-t {
+  background: #1e2732;
+  color: #cfe0f0;
 }
 
 @media (prefers-color-scheme: dark) {
-  fr-t { color: #9dc0e0; }
   html.fr-hl-block fr-s.fr-cur { color: #14110b !important; }
 }
 
