@@ -162,7 +162,9 @@
           return;
         }
         box.hidden = true;
-        loadFromUrl(url, true, gen === undefined ? undefined : beginLoad());
+        // With the permission in hand, cookies can go too: a paper behind an
+        // institutional login needs them, and CORS no longer applies.
+        loadFromUrl(url, true, gen === undefined ? undefined : beginLoad(), true);
       });
     });
 
@@ -334,7 +336,48 @@
     });
   }
 
-  function loadFromUrl(url, trusted, existingGen) {
+  /**
+   * Read a local file the browser is already showing, as bytes.
+   *
+   * pdf.js fetches a file:// address through the same machinery it uses for
+   * the network, and a file read carries no HTTP status line - the 0 it gets
+   * back reads as a failed request, which is the "Unexpected server response
+   * (0)" this used to end in. Reading the bytes here settles it, and hands the
+   * document to exactly the same code as a file dropped on the window.
+   *
+   * XMLHttpRequest rather than fetch: fetch refuses the file: scheme outright.
+   * Both need "Allow access to file URLs", checked before this is called.
+   */
+  function readLocalFile(url) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      try {
+        xhr.open('GET', url);
+        xhr.responseType = 'arraybuffer';
+      } catch (e) {
+        return reject(new Error('that address cannot be opened directly'));
+      }
+      xhr.onload = function () {
+        // No status line to check, so the bytes are the only evidence.
+        if (xhr.response && xhr.response.byteLength) return resolve(xhr.response);
+        reject(new Error('the file is empty, or the browser would not read it'));
+      };
+      xhr.onerror = function () {
+        reject(new Error('the file could not be read - if it has been moved or renamed, ' +
+                         'open it from the browser again'));
+      };
+      try { xhr.send(); } catch (e) { reject(new Error('the file could not be read')); }
+    });
+  }
+
+  /**
+   * @param {string} url
+   * @param {boolean} trusted whether this address came from us rather than a page
+   * @param {number} [existingGen]
+   * @param {boolean} [creds] send cookies - only after the host permission has
+   *   been granted, and only because a document behind a login needs them
+   */
+  function loadFromUrl(url, trusted, existingGen, creds) {
     var gen = existingGen === undefined ? beginLoad() : existingGen;
     var base = String(url).split(/[?#]/)[0].split('/').pop() || 'document.pdf';
     var name;
@@ -351,13 +394,21 @@
                     'chrome://extensions page. Or just drop the file onto this window, which needs no permission.');
           return;
         }
-        return loadPdf({ url: url }, trusted, gen);
+        // Read the bytes here rather than handing pdf.js the address: see
+        // readLocalFile. Once they are bytes this is the same path a file
+        // dropped on the window takes, so .docx works too.
+        return readLocalFile(url).then(function (buf) {
+          if (stale(gen)) return;
+          showStatus('Opening ' + name + '...', 0.35);
+          var isPdf = /\.pdf(\?|#|$)/i.test(url) || (FR.docx.sniff(buf) === 'pdf');
+          return isPdf ? loadPdf({ data: buf }, false, gen) : loadDocx(buf, gen);
+        });
       }).catch(function (e) {
         if (stale(gen)) return;
         showError('Could not open that file: ' + (e.message || e));
       });
     }
-    return loadPdf({ url: url }, trusted, gen).catch(function (e) {
+    return loadPdf({ url: url }, creds, gen).catch(function (e) {
       if (stale(gen)) return;
       // A cross-origin fetch the extension has no host permission for fails
       // here, and no wording can fix that - only the permission can. Offer it
@@ -377,9 +428,14 @@
     });
   }
 
-  function loadPdf(source, trusted, gen) {
+  function loadPdf(source, creds, gen) {
     state.kind = 'pdf';
-    if (source.url) source.withCredentials = !!trusted;
+    // Only http(s), and only when asked for. A response that says
+    // "Access-Control-Allow-Origin: *" - which is most open repositories,
+    // arXiv included - fails the CORS check outright if credentials are
+    // requested, so asking for them up front turns papers that would have
+    // opened with no permission at all into ones that need one.
+    if (source.url && /^https?:/i.test(source.url)) source.withCredentials = !!creds;
 
     return FR.pdf.open(source, function (f) {
       if (stale(gen)) return;          // do not repaint over a newer load
