@@ -38,7 +38,12 @@ var INJECT_JS = [
 var INJECT_CSS = ['src/content/content.css'];
 
 function isInjectable(url) {
-  return /^(https?|file|ftp):/i.test(url || '');
+  // An empty url means activeTab has not revealed it to us yet - there is no
+  // "tabs" permission here by design. Treat unknown as injectable and let the
+  // injection itself fail with a real error, rather than telling the reader
+  // the page is unsupported when it very likely is not.
+  if (!url) return true;
+  return /^(https?|file|ftp):/i.test(url);
 }
 
 function ping(tabId) {
@@ -84,7 +89,8 @@ function actOnActiveTab(message) {
 function notifyUnsupported(tab) {
   // chrome://, the Web Store and the native PDF viewer are all off limits to
   // extensions. Say so rather than failing silently.
-  var url = tab && tab.url ? tab.url : '';
+  var url = (tab && tab.url) || '';
+  if (!url) return;                    // nothing useful to say yet
   var why = /^chrome(-extension)?:|^edge:|^about:/i.test(url)
     ? 'Browser pages are off limits to extensions.'
     : (/\.pdf(\?|#|$)/i.test(url)

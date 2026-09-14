@@ -25,6 +25,9 @@
   function checkTab() {
     return send({ type: 'FR_STATUS_ACTIVE_TAB' }).then(function (r) {
       if (!r || r.error) return;
+      // Without the "tabs" permission the URL is only visible once activeTab
+      // has been granted. Unknown is not the same as unsupported.
+      if (!r.url) return;
 
       // A PDF URL passes the http(s) test, so it looks injectable - but Chrome
       // is rendering it in its own viewer, which no content script can reach.
