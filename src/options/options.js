@@ -101,21 +101,20 @@
         ]
       }, {
         title: 'Typography',
+        note: 'These shape the reading view in the PDF and Word reader, always. ' +
+              'On ordinary web pages they only apply if you also switch on ' +
+              '"Restyle the page for reading" below.',
         fields: [
           { key: 'typography', type: 'checkbox', label: 'Restyle the page for reading',
-            hint: 'Overrides the site\'s own font and spacing. Some layouts will shift.' },
+            hint: 'Overrides the site\'s own font and spacing on ordinary web pages. Some layouts will shift. The reader is styled either way.' },
           { key: 'fontFamily', type: 'select', label: 'Font',
             options: [['system', 'System'], ['serif', 'Serif'], ['sans', 'Sans-serif'],
-                      ['mono', 'Monospace'], ['dyslexic', 'OpenDyslexic (if installed)']],
-            showIf: function (s) { return s.typography; } },
+                      ['mono', 'Monospace'], ['dyslexic', 'OpenDyslexic (if installed)']] },
           { key: 'fontScale', type: 'range', label: 'Text size', min: 0.8, max: 2, step: 0.05, unit: 'x',
-            showIf: function (s) { return s.typography; } },
-          { key: 'lineHeight', type: 'range', label: 'Line spacing', min: 1.2, max: 2.6, step: 0.05,
-            showIf: function (s) { return s.typography; } },
-          { key: 'letterSpacing', type: 'range', label: 'Letter spacing', min: 0, max: 3, step: 0.1, unit: 'px',
-            showIf: function (s) { return s.typography; } },
-          { key: 'wordSpacing', type: 'range', label: 'Word spacing', min: 0, max: 12, step: 0.5, unit: 'px',
-            showIf: function (s) { return s.typography; } },
+            hint: 'The A- and A+ buttons in the reader toolbar are this same setting.' },
+          { key: 'lineHeight', type: 'range', label: 'Line spacing', min: 1.2, max: 2.6, step: 0.05 },
+          { key: 'letterSpacing', type: 'range', label: 'Letter spacing', min: 0, max: 3, step: 0.1, unit: 'px' },
+          { key: 'wordSpacing', type: 'range', label: 'Word spacing', min: 0, max: 12, step: 0.5, unit: 'px' },
           { key: 'maxWidth', type: 'number', label: 'Maximum line width', min: 0, max: 1400, step: 20,
             hint: 'Pixels. 0 leaves the page layout alone. Around 650 is a comfortable measure.' },
           { key: 'paperTint', type: 'select', label: 'Background',

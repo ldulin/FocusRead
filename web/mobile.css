@@ -3,43 +3,8 @@
  * Loaded after the shared stylesheets so it can override them.
  */
 
-/* ---------- what this is ---------- *
- * Closed, this is a row of two buttons and nothing else: the explanation is
- * orientation you read once, and a panel of it above the drop card pushes the
- * thing you actually came to do off the first screen.
- */
-.webnote { max-width: 46rem; margin: 0 auto 12px; }
-.webnoteRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-}
-.webnote .about { display: inline-flex; align-items: center; gap: 7px; }
-.webnote .badge {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
-  font: 600 11px/1 Georgia, "Times New Roman", serif;
-  font-style: italic;
-}
-.webnoteBody {
-  margin: 10px auto 0;
-  padding: 12px 16px;
-  border-radius: 11px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.webnoteBody strong { font-weight: 650; }
-.webnoteBody a { color: var(--accent); }
-.webnoteBody p { margin: 0 0 6px; }
-.webnoteBody p:last-child { margin: 0; }
+/* ---------- the sample button, under "Choose a file" ---------- */
+.sample { margin: 12px 0 0; }
 
 /* ---------- phones ---------- */
 @media (max-width: 640px) {
@@ -58,7 +23,7 @@
     margin: 14px 0 50vh;
     padding: 22px 18px 40px;
     border-radius: 0;
-    font-size: 17px;
+    font-size: calc(17px * var(--fr-scale, 1));   /* A-/A+ has to reach here too */
   }
 
   /* Side by side has nowhere to go on a phone; the stacked fallback in
@@ -67,9 +32,7 @@
 
   .notices { margin: 0 0 14px; border-radius: 0; font-size: 12.5px; }
 
-  .webnote { margin: 0 0 12px; }
-  .webnoteRow button { flex: 1; min-height: 40px; }   /* finger-sized */
-  .webnoteBody { border-radius: 0; font-size: 12.5px; }
+  .sample button { min-height: 40px; }                /* finger-sized */
 }
 
 /* Respect the notch and the home indicator. */

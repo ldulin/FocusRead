@@ -151,8 +151,11 @@ button.primary:hover { filter: brightness(1.08); }
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: 0 1px 3px rgba(0, 0, 0, .08), 0 10px 34px rgba(0, 0, 0, .06);
-  font-size: 17px;
-  line-height: 1.75;
+  font-size: calc(17px * var(--fr-scale, 1));
+  line-height: var(--fr-lh, 1.75);
+  letter-spacing: var(--fr-ls, 0);
+  word-spacing: var(--fr-ws, 0);
+  font-family: var(--fr-ff, inherit);
 }
 .doc p { margin: 0 0 1.05em; }
 .doc h1, .doc h2, .doc h3 { line-height: 1.3; letter-spacing: -.015em; margin: 1.9em 0 .6em; }
@@ -458,6 +461,28 @@ body.split #pages .textLayer fr-s { cursor: pointer; }
   min-width: 30px;
 }
 .zoom #zoomFit { font-size: 12px; padding: 5px 9px; }
+#textSize button { font-size: 13px; }
+
+/* Anchored under the bar, which is sticky and so is already a containing
+   block; out of flow, so opening it never moves the toolbar around. */
+.aboutPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 12px;
+  z-index: 60;
+  width: min(34rem, calc(100vw - 24px));
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .10), 0 16px 40px rgba(0, 0, 0, .14);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+}
+.aboutPanel p { margin: 0 0 8px; }
+.aboutPanel p:last-child { margin: 0; }
+.aboutPanel a { color: var(--accent); }
 .zoom output {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -473,6 +498,16 @@ body.split #pages { overflow: auto; }
    scroller, so zoomed pages start at the left edge - but an auto margin still
    centres one that is NARROWER than the pane, which is most of the zoom range,
    and collapses to nothing when it is wider. */
+/* While a zoom is being previewed the pages are scaled on the spot: the
+   wrapper is resized in JS so the scroll area stays truthful, and its contents
+   - canvas and text layer together, so they stay aligned - are transformed to
+   fill it. Blurry for a moment, replaced by a real render when the zooming
+   stops. */
+.pages.previewing .pageWrap > * {
+  transform: scale(var(--fr-preview, 1));
+  transform-origin: top left;
+}
+
 .pages.zoomed { align-items: flex-start; }
 .pages.zoomed .pageWrap { margin-left: auto; margin-right: auto; }
 

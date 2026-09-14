@@ -6,7 +6,7 @@
 <title>FocusRead - read papers aloud, sentence by sentence</title>
 <meta name="description" content="Open a PDF or Word file and read it sentence by sentence: tap to hear it, dim the rest to stay focused, translate a word or the whole page. Works on your phone.">
 <meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="reader/reader.css?v=f7437bdb2c">
+<link rel="stylesheet" href="reader/reader.css?v=bdb72de3ca">
 <link rel="stylesheet" href="content/content.css?v=3a7c868122">
 <link rel="icon" href="icons/icon32.png">
 <link rel="apple-touch-icon" href="icons/icon128.png">
@@ -14,8 +14,8 @@
 <meta name="theme-color" content="#1b1d21">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="FocusRead">
-<script>window.FR=window.FR||{};FR.BUILD="2026-09-14 c55872d";</script>
-<link rel="stylesheet" href="mobile.css?v=81dad9ebc1">
+<script>window.FR=window.FR||{};FR.BUILD="2026-09-14 e3a9b0a";</script>
+<link rel="stylesheet" href="mobile.css?v=25f680bb23">
 </head>
 <body>
 
@@ -35,6 +35,12 @@
     <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
   </div>
 
+  <div class="zoom" id="textSize" hidden>
+    <button id="textSmaller" title="Smaller text" aria-label="Smaller text">A&#8722;</button>
+    <output id="textLevel" aria-live="polite">100%</output>
+    <button id="textBigger" title="Larger text" aria-label="Larger text">A&#43;</button>
+  </div>
+
   <div class="zoom" id="zoom" hidden>
     <button id="zoomOut" title="Zoom out" aria-label="Zoom out">&#8722;</button>
     <button id="zoomFit" title="Fit the page to the window">Fit</button>
@@ -50,38 +56,35 @@
   </div>
 
   <button id="openBtn" class="ghost">Open file</button>
+  <button id="aboutBtn" class="ghost" title="What FocusRead is"
+          aria-expanded="false" aria-controls="aboutPanel">About</button>
   <button id="optionsBtn" class="ghost" title="Settings">Settings</button>
+
+  <div id="aboutPanel" class="aboutPanel" hidden>
+    <p><strong>FocusRead</strong> reads a paper to you one sentence at a time.
+    Click a sentence to hear it, click again to stop; the sentence being read
+    is highlighted, and each word lights up as it is spoken.</p>
+    <p>Everything happens on your device - the file is never uploaded. Only the
+    sentences you ask to translate leave the machine, and only to the provider
+    you picked in Settings.</p>
+    <p>This is the reader only. To use FocusRead on <em>web pages</em> as
+    well you need the Chrome extension, which browsers on phones cannot run -
+    <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
+    and install instructions</a>.</p>
+  </div>
 </header>
 
 <main id="stage">
   <div id="splitBar" class="splitBar" hidden>
     <label><input type="checkbox" id="syncScroll" checked> Keep the page image in step</label>
   </div>
-  
-<section class="webnote">
-  <div class="webnoteRow">
-    <button type="button" id="aboutBtn" class="ghost about"
-            aria-expanded="false" aria-controls="aboutBody">
-      <span class="badge" aria-hidden="true">i</span>What is this?
-    </button>
-    <button type="button" id="trySample" class="ghost">Try it on a sample paper</button>
-  </div>
-  <div id="aboutBody" class="webnoteBody" hidden>
-    <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
-    read it sentence by sentence - tap a sentence to hear it, tap again to stop.
-    Everything happens on your device; the file is never uploaded.</p>
-    <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
-    you need the Chrome extension, which browsers on phones cannot run -
-    <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
-    and install instructions</a>.</p>
-  </div>
-</section>
-
   <section id="drop" class="drop">
     <div class="dropInner">
       <h1>Open a paper</h1>
       <p class="lead">Drop a <strong>PDF</strong> or <strong>.docx</strong> here, or choose a file.</p>
       <button id="pickBtn" class="primary">Choose a file</button>
+      
+      <p class="sample"><button type="button" id="trySample" class="ghost">Try it on a sample paper</button></p>
       <input type="file" id="fileInput" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
       <p class="fine">
         Nothing is uploaded. The file is read inside your browser.
@@ -115,31 +118,9 @@
 <script src="content/controller.js?v=ad77c5cc70"></script>
 <script src="reader/docx.js?v=74d6971811"></script>
 <script src="reader/pdf.js?v=ee58d305e7"></script>
-<script src="reader/reader.js?v=93cb9722e5"></script>
+<script src="reader/reader.js?v=f08dd4e3a3"></script>
 <script>
 (function () {
-  // Once a document is open, even the closed row is just taking up reading
-  // space, and there is nothing left on the page to orient anyone about. The
-  // drop card's own visibility is the signal: it comes back when the document
-  // is closed, and so does this.
-  var noteSec = document.querySelector('.webnote');
-  var drop = document.getElementById('drop');
-  if (noteSec && drop && window.MutationObserver) {
-    new MutationObserver(function () { noteSec.hidden = drop.hidden; })
-      .observe(drop, { attributes: true, attributeFilter: ['hidden'] });
-  }
-
-  var aboutBtn = document.getElementById('aboutBtn');
-  var aboutBody = document.getElementById('aboutBody');
-  if (aboutBtn && aboutBody) {
-    aboutBtn.addEventListener('click', function () {
-      var open = aboutBody.hidden;
-      aboutBody.hidden = !open;
-      // Announce it as well as show it: the button IS the state.
-      aboutBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    });
-  }
-
   // Somewhere to start without hunting for a file first.
   var sample = document.getElementById('trySample');
   if (!sample) return;

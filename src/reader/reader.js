@@ -173,6 +173,7 @@
     state.heads = null;
     state.kind = null;
     state.rendered = new Set();
+    state.fitWidth = 0;
     $('doc').hidden = true;
     $('doc').innerHTML = '';
     $('pages').hidden = true;
@@ -182,6 +183,7 @@
     $('notices').hidden = true;
     $('splitBar').hidden = true;
     $('zoom').hidden = true;
+    $('textSize').hidden = true;
     document.body.classList.remove('split');
   }
 
@@ -403,14 +405,26 @@
     host.innerHTML = '';
     state.rendered = new Set();
     host.hidden = false;
-    $('doc').hidden = true;
+    // Not in split view: there the reading pane is beside these pages, and a
+    // zoom re-renders through here without going back through renderSplit -
+    // which is what would otherwise put the right-hand pane back.
+    if (state.mode !== 'split') $('doc').hidden = true;
     hideStatus();
 
     // Size to the CONTAINER, not the window: in split view the pane is roughly
     // half the width, and sizing from the window made every page overflow it.
-    var avail = host.clientWidth || (root.innerWidth || 900);
-    var fit = Math.max(260, Math.min(900, avail - 34));
-    var width = Math.max(160, fit * zoom());
+    //
+    // Measured once per layout and then held: a zoomed page overflows the pane
+    // horizontally, which brings up a scrollbar, which narrows clientWidth,
+    // which would make the committed render come out a few percent smaller
+    // than the preview that was just on screen - a visible snap on every zoom.
+    // Holding it also makes zoom exactly proportional, which is what the
+    // preview assumes.
+    if (!state.fitWidth) {
+      var avail = host.clientWidth || (root.innerWidth || 900);
+      state.fitWidth = Math.max(260, Math.min(900, avail - 34));
+    }
+    var width = Math.max(160, state.fitWidth * zoom());
 
     return doc.getPage(1).then(function (p1) {
       // A reset landing inside this await would null state.doc; use the local.
@@ -452,6 +466,7 @@
       // a document opened in a background tab would otherwise show nothing but
       // blank placeholders until the reader scrolled.
       renderVisiblePages(host, scale, doc);
+      zoomShown = zoom();          // what the canvases are now drawn at
 
       if (skipController) return null;
       return attachController(host, false);
@@ -468,6 +483,52 @@
    * ------------------------------------------------------------------ */
 
   var ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5, 3];
+  var TEXT_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
+
+  /* ------------------------------------------------------------------ *
+   * Reading-view text size
+   *
+   * The same fontScale the Settings page exposes, so there is one answer to
+   * "how big is the text" rather than two that disagree. The reading view in
+   * Side by side is the same element, so it follows along.
+   * ------------------------------------------------------------------ */
+
+  function textScale() {
+    var v = state.settings ? Number(state.settings.fontScale) : 1;
+    return isFinite(v) && v > 0 ? Math.min(2, Math.max(0.8, v)) : 1;
+  }
+
+  function showTextSize() {
+    var v = textScale();
+    $('textLevel').textContent = Math.round(v * 100) + '%';
+    $('textSmaller').disabled = v <= TEXT_STEPS[0];
+    $('textBigger').disabled = v >= TEXT_STEPS[TEXT_STEPS.length - 1];
+    // Set it here too rather than waiting for the settings round trip, so the
+    // text resizes on the click instead of a moment after it.
+    document.documentElement.style.setProperty('--fr-scale', String(v));
+  }
+
+  function setTextScale(v) {
+    v = Math.min(2, Math.max(0.8, v));
+    if (!state.settings || Math.abs(v - textScale()) < 0.001) return;
+    state.settings.fontScale = v;
+    FR.settings.set({ fontScale: v });
+    showTextSize();
+  }
+
+  function stepText(dir) {
+    var v = textScale();
+    var i;
+    if (dir > 0) {
+      for (i = 0; i < TEXT_STEPS.length; i++) {
+        if (TEXT_STEPS[i] > v + 0.001) return setTextScale(TEXT_STEPS[i]);
+      }
+    } else {
+      for (i = TEXT_STEPS.length - 1; i >= 0; i--) {
+        if (TEXT_STEPS[i] < v - 0.001) return setTextScale(TEXT_STEPS[i]);
+      }
+    }
+  }
 
   function zoom() {
     var z = state.settings ? Number(state.settings.pdfZoom) : 1;
@@ -497,6 +558,38 @@
    * @param {{x:number, y:number}} [at] point to hold, in pane coordinates;
    *   the middle of the pane if not given, or the pointer for a wheel zoom
    */
+  /*
+   * Re-rendering every page is far too slow to do on each step of a zoom - and
+   * going through setMode also tore down the reading pane and the controller,
+   * which a zoom does not touch at all. So a zoom now happens in two parts:
+   * the pages are scaled on the spot with a transform, which is instant and
+   * keeps the layout honest because the wrappers are resized to match, and the
+   * real re-render follows once the zooming stops. A burst of clicks costs one
+   * re-render instead of one each.
+   */
+  var zoomTimer = null;
+  var zoomShown = 1;          // the scale the canvases were actually drawn at
+
+  function previewZoom(z) {
+    var host = $('pages');
+    var k = z / zoomShown;
+    host.style.setProperty('--fr-preview', String(k));
+    host.classList.toggle('previewing', Math.abs(k - 1) > 0.001);
+    // Resize the wrappers so the scrollable area, and therefore every scroll
+    // position computed from it, matches what is on screen.
+    Array.prototype.forEach.call(host.children, function (el) {
+      if (!el.dataset) return;
+      if (el.dataset.baseW === undefined) {
+        // Captured before this element has ever been scaled, so it is the
+        // size the canvas was actually drawn at.
+        el.dataset.baseW = String(el.offsetWidth);
+        el.dataset.baseH = String(el.offsetHeight);
+      }
+      el.style.width = Math.floor(Number(el.dataset.baseW) * k) + 'px';
+      el.style.height = Math.floor(Number(el.dataset.baseH) * k) + 'px';
+    });
+  }
+
   function setZoom(z, at) {
     z = Math.min(3, Math.max(0.5, z));
     if (!state.settings) return;
@@ -513,9 +606,39 @@
     var fx = (pane.scrollLeft + ax) / Math.max(1, pane.scrollWidth);
     var fy = (pane.scrollTop + ay) / Math.max(1, pane.scrollHeight);
 
-    setMode(state.mode).then(function () {
-      pane.scrollLeft = fx * pane.scrollWidth - ax;
-      pane.scrollTop = fy * pane.scrollHeight - ay;
+    previewZoom(z);
+    // The preview changed the layout synchronously, so the point that was
+    // under the cursor can be put back under it now.
+    pane.scrollLeft = fx * pane.scrollWidth - ax;
+    pane.scrollTop = fy * pane.scrollHeight - ay;
+
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(commitZoom, 220);
+  }
+
+  /** Draw the pages properly at the scale the preview is showing. */
+  function commitZoom() {
+    zoomTimer = null;
+    if (state.mode !== 'original' && state.mode !== 'split') return;
+    var pane = $('pages');
+    var keepL = pane.scrollLeft, keepT = pane.scrollTop;
+
+    // Only the page images. In split view the reading pane and its controller
+    // are untouched by a zoom, and rebuilding them was most of what made this
+    // slow. In original view the marks live in the page text layer that is
+    // about to be thrown away, so that controller does have to be replaced.
+    var ownsController = state.mode === 'original';
+    if (ownsController && state.controller) {
+      state.controller.deactivate();
+      state.controller = null;
+    }
+    renderOriginal(undefined, !ownsController).then(function () {
+      zoomShown = zoom();
+      pane.style.removeProperty('--fr-preview');
+      pane.classList.remove('previewing');
+      // Same geometry as the preview was showing, so the scroll carries over.
+      pane.scrollLeft = keepL;
+      pane.scrollTop = keepT;
     });
   }
 
@@ -569,10 +692,13 @@
     });
     if (state.controller) { state.controller.deactivate(); state.controller = null; }
 
+    state.fitWidth = 0;                  // the pane's width is about to change
     document.body.classList.toggle('split', mode === 'split');
     $('splitBar').hidden = mode !== 'split';
     $('zoom').hidden = !(mode === 'original' || mode === 'split');
+    $('textSize').hidden = !(mode === 'reflow' || mode === 'split');
     showZoom();
+    showTextSize();
 
     if (mode === 'original') return renderOriginal(gen);
     if (mode === 'split') return renderSplit(gen);
@@ -878,6 +1004,41 @@
       });
     });
 
+    $('textBigger').addEventListener('click', function () { stepText(1); });
+    $('textSmaller').addEventListener('click', function () { stepText(-1); });
+
+    // About: a panel under the bar rather than a block above the document.
+    var about = $('aboutBtn'), panel = $('aboutPanel');
+    about.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var open = panel.hidden;
+      panel.hidden = !open;
+      about.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function (e) {
+      if (panel.hidden) return;
+      if (panel.contains(e.target) || e.target === about) return;
+      panel.hidden = true;
+      about.setAttribute('aria-expanded', 'false');
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !panel.hidden) {
+        panel.hidden = true;
+        about.setAttribute('aria-expanded', 'false');
+        about.focus();
+      }
+    });
+
+    var resizeTimer = null;
+    root.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        if (state.mode !== 'original' && state.mode !== 'split') return;
+        state.fitWidth = 0;              // re-measure against the new window
+        commitZoom();
+      }, 220);
+    });
+
     $('zoomIn').addEventListener('click', function () { stepZoom(1); });
     $('zoomOut').addEventListener('click', function () { stepZoom(-1); });
     $('zoomFit').addEventListener('click', function () { setZoom(1); });
@@ -925,6 +1086,15 @@
 
   document.addEventListener('DOMContentLoaded', function () {
     wire();
+    // Settings can change from the Settings page, in this tab or another one.
+    // Without this the reader keeps its own copy from load time, and the next
+    // A+ or zoom step would then start from a value that is no longer true.
+    FR.settings.onChange(function (s) {
+      state.settings = s;
+      showTextSize();
+      showZoom();
+    });
+
     FR.settings.get().then(function (s) {
       state.settings = s;
       state.mode = (s.pdfView === 'original' || s.pdfView === 'split') ? s.pdfView : 'reflow';

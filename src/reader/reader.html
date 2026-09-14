@@ -25,6 +25,12 @@
     <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
   </div>
 
+  <div class="zoom" id="textSize" hidden>
+    <button id="textSmaller" title="Smaller text" aria-label="Smaller text">A&#8722;</button>
+    <output id="textLevel" aria-live="polite">100%</output>
+    <button id="textBigger" title="Larger text" aria-label="Larger text">A&#43;</button>
+  </div>
+
   <div class="zoom" id="zoom" hidden>
     <button id="zoomOut" title="Zoom out" aria-label="Zoom out">&#8722;</button>
     <button id="zoomFit" title="Fit the page to the window">Fit</button>
@@ -40,7 +46,18 @@
   </div>
 
   <button id="openBtn" class="ghost">Open file</button>
+  <button id="aboutBtn" class="ghost" title="What FocusRead is"
+          aria-expanded="false" aria-controls="aboutPanel">About</button>
   <button id="optionsBtn" class="ghost" title="Settings">Settings</button>
+
+  <div id="aboutPanel" class="aboutPanel" hidden>
+    <p><strong>FocusRead</strong> reads a paper to you one sentence at a time.
+    Click a sentence to hear it, click again to stop; the sentence being read
+    is highlighted, and each word lights up as it is spoken.</p>
+    <p>Everything happens on your device - the file is never uploaded. Only the
+    sentences you ask to translate leave the machine, and only to the provider
+    you picked in Settings.</p>
+  </div>
 </header>
 
 <main id="stage">
