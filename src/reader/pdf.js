@@ -362,6 +362,23 @@
    * Paragraph assembly
    * ------------------------------------------------------------------ */
 
+  /**
+   * The right-hand edge of each column.
+   *
+   * A global maximum is wrong the moment a page has two columns: every
+   * left-column line is then "short", and the short-last-line rule - meant to
+   * catch a paragraph ending early - fires on almost every line, chopping
+   * paragraphs into single lines.
+   */
+  function columnEdges(lines) {
+    var edges = {};
+    lines.forEach(function (ln) {
+      var c = ln.col || 0;
+      if (edges[c] === undefined || ln.right > edges[c]) edges[c] = ln.right;
+    });
+    return edges;
+  }
+
   function isHeadingLine(ln, bodyHeight) {
     var t = ln.text.trim();
     if (t.length > 90 || t.length < 3) return false;
@@ -386,7 +403,7 @@
     }
     var normalGap = median(gaps.filter(function (g) { return g > 0; })) || bodyHeight * 1.2;
 
-    var rightEdge = lines.reduce(function (m, ln) { return Math.max(m, ln.right); }, 0);
+    var edges = columnEdges(lines);
     var leftEdge = lines.reduce(function (m, ln) { return Math.min(m, ln.left); }, Infinity);
     var indentTol = bodyHeight * 0.8;
 
@@ -404,7 +421,7 @@
           if (gap > normalGap * 1.45) breakHere = true;
           else if (ln.left - leftEdge > indentTol && ln.left - prev.left > indentTol) breakHere = true;
           // A short last line followed by a capital is a paragraph end.
-          else if (prev.right < rightEdge - bodyHeight * 3 &&
+          else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
                    endsSentence(prev.text) &&
                    /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;
         }
@@ -605,7 +622,7 @@
         notices.push('No text layer found. This PDF is probably a scan - it would need OCR, which FocusRead does not do.');
       }
 
-      return { blocks: merged, notices: notices, pages: total };
+      return { blocks: merged, notices: notices, pages: total, heads: heads };
     });
   }
 
@@ -613,7 +630,7 @@
    * Public: original-layout rendering
    * ------------------------------------------------------------------ */
 
-  function renderPage(doc, mod, pageNum, container, scale, placeholder) {
+  function renderPage(doc, mod, pageNum, container, scale, placeholder, opts) {
     return doc.getPage(pageNum).then(function (page) {
       var viewport = page.getViewport({ scale: scale });
       var dpr = Math.min(2, root.devicePixelRatio || 1);
@@ -660,10 +677,12 @@
       ctx.scale(dpr, dpr);
 
 
+      var textContent = null;
       var renderArgs = { canvasContext: ctx, canvas: canvas, viewport: viewport };
       return page.render(renderArgs).promise.then(function () {
         return page.getTextContent();
       }).then(function (tc) {
+        textContent = tc;
         if (typeof mod.TextLayer === 'function') {
           var tl = new mod.TextLayer({ textContentSource: tc, container: layer, viewport: viewport });
           return tl.render();
@@ -673,6 +692,15 @@
         }
         return null;
       }).then(function () {
+        // Rebuild the layer's spans into paragraphs so the reading engine sees
+        // sentences rather than lines.
+        try {
+          if (textContent) {
+            groupTextLayer(layer, textContent, page.getViewport({ scale: 1, rotation: 0 }), opts || {});
+          }
+        } catch (e) {
+          console.warn('[FocusRead] could not group the text layer', e);
+        }
         page.cleanup();
         if (placeholder && placeholder.parentNode) placeholder.remove();
         return wrap;
@@ -684,10 +712,141 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Turning a text layer into paragraphs
+   *
+   * pdf.js emits one absolutely-positioned <span> per text run, which is
+   * usually one LINE. Every span is its own block as far as the DOM is
+   * concerned, so the reading engine saw 83 lines as 101 "sentences" and read
+   * the page a line at a time - stopping mid-clause at every line end.
+   *
+   * Wrapping the spans of a paragraph in a plain <div> fixes it: the div is
+   * static, so the spans keep positioning against .textLayer and nothing moves
+   * visually, but the engine now sees one block of flowing text and can run a
+   * sentence across line breaks.
+   * ------------------------------------------------------------------ */
+
+  /**
+   * @param {Element} layer         the .textLayer div, already rendered
+   * @param {object} textContent    the SAME object the layer was built from
+   * @param {object} viewport       unrotated viewport, for the page width
+   * @param {object} [opts]         { heads, stripRunningHeads }
+   * @returns {number} paragraphs created
+   *
+   * Grouping is done in PDF user space, not from the rendered boxes. The
+   * layer's on-screen geometry is unreliable: an ancestor transform scales the
+   * whole page, and pdf.js stretches each span with scaleX to match the canvas
+   * glyphs, so getBoundingClientRect() reports widths that do not agree with
+   * the page's own coordinates. The extraction pass already has correct
+   * coordinates, so reuse them and map item -> span by position.
+   */
+  function groupTextLayer(layer, textContent, viewport, opts) {
+    opts = opts || {};
+    var extracted = toBoxes(textContent);
+    var boxes = extracted.boxes.filter(function (b) { return !b.rotated; });
+    if (boxes.length < 2) return 0;
+
+    // pdf.js creates one span per non-empty item, in item order, plus <br>
+    // elements it marks as presentational.
+    var spans = Array.prototype.filter.call(layer.children, function (el) {
+      return el.tagName === 'SPAN' && el.textContent && el.textContent.length;
+    });
+    if (spans.length !== boxes.length) {
+      // Rather than risk attaching the wrong span to the wrong line, leave the
+      // layer alone; reading falls back to line-by-line, which is correct if
+      // clumsy.
+      console.warn('[FocusRead] text layer has ' + spans.length + ' spans for ' +
+                   boxes.length + ' runs; not grouping');
+      return 0;
+    }
+    boxes.forEach(function (b, i) { b.el = spans[i]; });
+
+    var gutter = detectColumns(boxes, viewport.width);
+    var lines = toLines(boxes, gutter);
+    if (!lines.length) return 0;
+
+    var bodyHeight = median(lines.map(function (l) { return l.h; })) || 10;
+
+    // Drop the furniture, so the running head is not read out mid-page the way
+    // it used to be in this view.
+    if (opts.stripRunningHeads !== false) {
+      var top = viewport.height * 0.90, bottom = viewport.height * 0.10;
+      lines = lines.filter(function (ln) {
+        var atEdge = ln.y >= top || ln.y <= bottom;
+        if (!atEdge) return true;
+        if (PAGE_NUMBER.test(ln.text)) { hide(ln); return false; }
+        if (opts.heads && opts.heads[normaliseForRepeat(ln.text)]) { hide(ln); return false; }
+        return true;
+      });
+    }
+
+    var groups = regroupLines(lines, bodyHeight);
+
+    var made = 0;
+    groups.forEach(function (group) {
+      var para = document.createElement('div');
+      para.className = 'fr-para';
+      layer.appendChild(para);
+      group.forEach(function (ln, li) {
+        ln.items.forEach(function (b, bi) {
+          if (!b.el) return;
+          // A line break is a word break: without this the last word of one
+          // line runs into the first word of the next.
+          if (li > 0 || bi > 0) para.appendChild(document.createTextNode(' '));
+          para.appendChild(b.el);
+        });
+      });
+      made++;
+    });
+    return made;
+  }
+
+  function hide(line) {
+    line.items.forEach(function (b) {
+      b.el.setAttribute('data-fr-furniture', '');
+      b.el.classList.add('fr-ignore');
+    });
+  }
+
+  /** The same paragraph-break rules as linesToBlocks, returning line groups. */
+  function regroupLines(lines, bodyHeight) {
+    if (!lines.length) return [];
+    var gaps = [];
+    for (var i = 1; i < lines.length; i++) {
+      if (lines[i].col === lines[i - 1].col) gaps.push(lines[i - 1].y - lines[i].y);
+    }
+    var normalGap = median(gaps.filter(function (g) { return g > 0; })) || bodyHeight * 1.2;
+    var edges = columnEdges(lines);
+    var leftEdge = lines.reduce(function (m, ln) { return Math.min(m, ln.left); }, Infinity);
+    var indentTol = bodyHeight * 0.8;
+
+    var groups = [], cur = null;
+    lines.forEach(function (ln, idx) {
+      var prev = lines[idx - 1];
+      var heading = isHeadingLine(ln, bodyHeight);
+      var breakHere = !cur || heading || (prev && isHeadingLine(prev, bodyHeight));
+      if (!breakHere && prev) {
+        if (prev.col !== ln.col) breakHere = true;
+        else {
+          var gap = prev.y - ln.y;
+          if (gap > normalGap * 1.45) breakHere = true;
+          else if (ln.left - leftEdge > indentTol && ln.left - prev.left > indentTol) breakHere = true;
+          else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
+                   endsSentence(prev.text) &&
+                   /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;
+        }
+      }
+      if (breakHere) { cur = [ln]; groups.push(cur); }
+      else cur.push(ln);
+    });
+    return groups;
+  }
+
   FR.pdf = {
     open: open,
     extractReflow: extractReflow,
     renderPage: renderPage,
+    groupTextLayer: groupTextLayer,
     available: function () { return lib().then(function () { return true; }, function () { return false; }); },
     // Exposed for tests. The layout reconstruction is pure geometry, so it can
     // be exercised with synthetic text runs without pdf.js present.
@@ -699,6 +858,7 @@
       findRunningHeads: findRunningHeads,
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
+      columnEdges: columnEdges,
       endsSentence: endsSentence,
       mergeContinuations: mergeContinuations,
       edgeLines: edgeLines,

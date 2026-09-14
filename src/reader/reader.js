@@ -19,6 +19,7 @@
     kind: null,         // 'pdf' | 'docx'
     name: '',
     blocks: null,
+    heads: null,
     rendered: new Set(),
     controller: null,
     io: null
@@ -169,6 +170,7 @@
     state.doc = null;
     state.mod = null;
     state.blocks = null;
+    state.heads = null;
     state.kind = null;
     state.rendered = new Set();
     $('doc').hidden = true;
@@ -319,6 +321,7 @@
     }).then(function (out) {
       if (!out || stale(gen)) return;
       state.blocks = out.blocks;
+      state.heads = out.heads || {};
       showNotices(out.notices);
       return setMode(state.mode, gen);
     });
@@ -415,7 +418,7 @@
           state.rendered.add(n);
           state.io.unobserve(e.target);
           var slot = e.target;
-          FR.pdf.renderPage(doc, state.mod, n, host, scale, slot).catch(function (err) {
+          FR.pdf.renderPage(doc, state.mod, n, host, scale, slot, renderOpts()).catch(function (err) {
             state.rendered.delete(n);          // allow a retry on the next pass
             slot.textContent = 'Could not render page ' + n + ': ' + (err.message || err);
             slot.style.cssText += ';display:grid;place-items:center;color:#b3261e;font-size:13px;padding:16px';
@@ -436,6 +439,13 @@
     });
   }
 
+  function renderOpts() {
+    return {
+      heads: state.heads || {},
+      stripRunningHeads: !state.settings || state.settings.stripRunningHeads !== false
+    };
+  }
+
   /** Render every placeholder currently in (or near) view, by geometry. */
   function renderVisiblePages(host, scale, doc) {
     var hostRect = host.getBoundingClientRect();
@@ -450,7 +460,7 @@
       state.rendered.add(n);
       if (state.io) state.io.unobserve(slot);
       (function (page, placeholder) {
-        FR.pdf.renderPage(doc, state.mod, page, host, scale, placeholder).catch(function (err) {
+        FR.pdf.renderPage(doc, state.mod, page, host, scale, placeholder, renderOpts()).catch(function (err) {
           state.rendered.delete(page);
           placeholder.textContent = 'Could not render page ' + page + ': ' + (err.message || err);
         });
@@ -487,6 +497,7 @@
       $('pages').hidden = false;
       hideStatus();
       wireScrollSync();
+      wireOriginalClicks();
       return attachController($('doc'), true).then(function (c) {
         syncPagesToReading();          // start the two panes on the same page
         return c;
@@ -499,7 +510,13 @@
    * ------------------------------------------------------------------ */
 
   function attachController(rootEl, allowBilingual) {
-    var c = new FR.Controller({ root: rootEl, isReader: true });
+    var c = new FR.Controller({
+      root: rootEl,
+      isReader: true,
+      // In the page-image view the text is a layer of absolutely positioned
+      // spans; tell the engine which wrapper counts as one paragraph.
+      groupSelector: allowBilingual ? null : '.fr-para'
+    });
     c.allowBilingual = allowBilingual;
     state.controller = c;
     return c.activate().then(function () {
@@ -560,6 +577,118 @@
       clearTimeout(syncTimer);
       syncTimer = setTimeout(syncPagesToReading, 90);
     }, { passive: true });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Clicking the page image jumps the reading pane
+   *
+   * The two panes are separate engines with their own numbering, and the text
+   * does not match character for character: the page image keeps the
+   * hyphenation ("inter- national") that the reading view rejoins, and line
+   * breaks fall in different places. So match on word overlap within the same
+   * page rather than trying to align indices.
+   * ------------------------------------------------------------------ */
+
+  function normaliseForMatch(text) {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[\u2010-\u2015-]\s+/g, '')       // rejoin "inter- national"
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function tokenSet(text) {
+    var seen = Object.create(null);
+    normaliseForMatch(text).split(' ').forEach(function (t) {
+      if (t.length > 2) seen[t] = true;             // skip "a", "of", "the"
+    });
+    return seen;
+  }
+
+  /** Jaccard-ish overlap, biased towards covering the clicked text. */
+  function overlap(clickedTokens, candidate) {
+    var cand = tokenSet(candidate);
+    var keys = Object.keys(clickedTokens);
+    if (!keys.length) return 0;
+    var hit = 0;
+    keys.forEach(function (k) { if (cand[k]) hit++; });
+    return hit / keys.length;
+  }
+
+  function pageOfNode(node) {
+    var wrap = node && node.closest ? node.closest('[data-page]') : null;
+    return wrap ? Number(wrap.getAttribute('data-page')) : null;
+  }
+
+  /**
+   * @param {string} text  what was clicked on the page image
+   * @param {number|null} page
+   * @returns {number} sentence index in the reading pane, or -1
+   */
+  function findReadingSentence(text, page) {
+    var c = state.controller;
+    if (!c || !c.engine) return -1;
+    var clicked = tokenSet(text);
+    if (!Object.keys(clicked).length) return -1;
+
+    var best = -1, bestScore = 0;
+    c.engine.sentences.forEach(function (rec) {
+      // Prefer the same page, but do not require it: a paragraph can straddle
+      // a page break, and the reading view stitches those together.
+      var recPage = rec.blockEl && rec.blockEl.getAttribute
+        ? Number(rec.blockEl.getAttribute('data-page'))
+        : null;
+      if (page && recPage && Math.abs(recPage - page) > 1) return;
+
+      var score = overlap(clicked, rec.text);
+      if (recPage === page) score += 0.05;          // tie-break towards the page
+      if (score > bestScore) { bestScore = score; best = rec.i; }
+    });
+
+    return bestScore >= 0.45 ? best : -1;
+  }
+
+  function wireOriginalClicks() {
+    if (state.clickWired) return;
+    state.clickWired = true;
+
+    $('pages').addEventListener('click', function (e) {
+      if (state.mode !== 'split') return;
+      var mark = e.target.closest ? e.target.closest('fr-s[data-i], .textLayer span') : null;
+      if (!mark) return;
+
+      // Use the whole sentence when the click landed on one, otherwise the line.
+      var text = mark.tagName === 'FR-S'
+        ? sentenceTextAt(mark)
+        : (mark.textContent || '');
+      if (!text.trim()) return;
+
+      var idx = findReadingSentence(text, pageOfNode(mark));
+      if (idx < 0) {
+        flash(mark, false);
+        return;
+      }
+
+      var c = state.controller;
+      c.engine.setCurrent(idx, { scroll: true });
+      c.ui.setState({ index: idx });
+      flash(mark, true);
+    }, true);
+  }
+
+  /** Every mark of the clicked sentence, joined. */
+  function sentenceTextAt(mark) {
+    var i = mark.getAttribute('data-i');
+    var all = mark.closest('.textLayer')
+      ? mark.closest('.textLayer').querySelectorAll('fr-s[data-i="' + i + '"]')
+      : [mark];
+    return Array.prototype.map.call(all, function (m) { return m.textContent; }).join(' ');
+  }
+
+  function flash(el, found) {
+    el.classList.add(found ? 'fr-jumped' : 'fr-nomatch');
+    setTimeout(function () { el.classList.remove('fr-jumped', 'fr-nomatch'); }, 900);
   }
 
   function syncPagesToReading() {
@@ -678,6 +807,7 @@
   document.addEventListener('DOMContentLoaded', function () {
     wire();
     FR.settings.get().then(function (s) {
+      state.settings = s;
       state.mode = s.pdfView === 'original' ? 'original' : 'reflow';
       return sourceFromLocation().then(function (src) {
         if (!src) return;

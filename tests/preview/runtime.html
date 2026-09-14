@@ -73,6 +73,7 @@
 <script src="../../src/lib/settings.js?v=1789357633"></script>
 <script src="../../src/lib/translate.js?v=1789357531"></script>
 <script src="../../src/content/speech.js?v=1789357633"></script>
+<script src="../../src/content/engine.js?v=1789363755"></script>
 
 <script>
 (function () {
@@ -177,6 +178,42 @@
        true);
     eq('a cap below the safe floor is raised, not honoured literally',
        FR.speech.splitForSpeech(LONG, 10).every(function (p) { return p.end - p.start <= 60; }), true);
+
+    /* ========== engine: groupSelector (the PDF text-layer case) ========== */
+    section('engine - groupSelector');
+    (function () {
+      // A PDF text layer is absolutely positioned spans: each computes to
+      // display:block, so without groupSelector every LINE is its own block
+      // and no sentence can span a line break.
+      var host = document.createElement('div');
+      host.style.cssText = 'position:relative;width:400px;height:200px';
+      host.innerHTML =
+        '<div class="fr-para">' +
+        '<span style="position:absolute;top:0">Prior work showed an</span> ' +
+        '<span style="position:absolute;top:20px">effect at p &lt; 0.05. We</span> ' +
+        '<span style="position:absolute;top:40px">replicated it here.</span>' +
+        '</div>';
+      document.body.appendChild(host);
+
+      var plain = new FR.Engine(host, {});
+      plain.scan();
+      var plainTexts = plain.sentences.map(function (r) { return r.text; });
+      plain.detach();
+
+      var grouped = new FR.Engine(host, { groupSelector: '.fr-para' });
+      grouped.scan();
+      var groupedTexts = grouped.sentences.map(function (r) { return r.text; });
+      var marks = grouped.sentences.map(function (r) { return r.marks.length; });
+      grouped.detach();
+      host.remove();
+
+      eq('without groupSelector every line is its own unit', plainTexts.length, 3);
+      eq('with groupSelector the lines become sentences', groupedTexts.length, 2);
+      eq('a sentence spans the line break', groupedTexts[0],
+         'Prior work showed an effect at p < 0.05.');
+      eq('and is marked in more than one place', marks[0] > 1, true);
+      eq('the second sentence is intact', groupedTexts[1], 'We replicated it here.');
+    })();
 
     /* ================= settings: the key-wipe bug ================= */
     section('settings - provider config is not clobbered');

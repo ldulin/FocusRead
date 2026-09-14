@@ -58,6 +58,7 @@
 
   function Controller(opts) {
     opts = opts || {};
+    this.opts = opts;
     this.rootEl = opts.root || document.body;
     this.isReader = !!opts.isReader;
     this.active = false;
@@ -87,7 +88,8 @@
 
       self.engine = new FR.Engine(self.rootEl, {
         readUnit: s.readUnit,
-        clauseMaxLen: s.clauseMaxLen
+        clauseMaxLen: s.clauseMaxLen,
+        groupSelector: self.opts.groupSelector || null
       });
 
       self.ui = new FR.UI(self._actions(), { position: s.toolbarPos });

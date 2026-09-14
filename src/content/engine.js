@@ -78,6 +78,7 @@
       readUnit: 'sentence',
       clauseMaxLen: 220,
       minBlockChars: 2,
+      groupSelector: null,       // ancestors matching this are a single block
       chunkBudgetMs: 12          // wrapping work per animation frame
     }, opts || {});
     this.sentences = [];
@@ -110,9 +111,26 @@
     return v;
   };
 
-  // The nearest non-inline ancestor: the visual paragraph this text belongs to.
+  /**
+   * The visual paragraph this text belongs to.
+   *
+   * Normally that is the nearest non-inline ancestor. `groupSelector` overrides
+   * it: any ancestor matching that selector IS the block, however its children
+   * are laid out. A PDF text layer needs this - every run is an absolutely
+   * positioned span, so it computes to display:block and would otherwise be a
+   * paragraph of its own, making the reader stop at the end of every LINE.
+   */
   Engine.prototype._blockOf = function (textNode) {
     var el = textNode.parentElement;
+    if (!el) return this.root;
+
+    if (this.opts.groupSelector && el.closest) {
+      try {
+        var group = el.closest(this.opts.groupSelector);
+        if (group) return group;
+      } catch (e) { /* bad selector; fall through */ }
+    }
+
     while (el && el !== this.root && this._isInline(el)) el = el.parentElement;
     return el || this.root;
   };
@@ -380,15 +398,43 @@
     return this.index > 0 ? this.setCurrent(this.index - 1, opts) : false;
   };
 
+  /** The nearest ancestor that actually scrolls, or null for the page itself. */
+  function scrollParent(el) {
+    var n = el && el.parentElement;
+    while (n && n !== document.body && n !== document.documentElement) {
+      var cs;
+      try { cs = getComputedStyle(n); } catch (e) { return null; }
+      if (/(auto|scroll|overlay)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+
   Engine.prototype.scrollIntoView = function (i) {
     var marks = this.marksFor(i);
     if (!marks.length) return;
     var r;
     try { r = marks[0].getBoundingClientRect(); } catch (e) { return; }
-    var vh = root.innerHeight || document.documentElement.clientHeight;
+
+    // Measure against whatever actually scrolls. In the reader's side-by-side
+    // view each pane is its own scroller, so testing against the window height
+    // said "already visible" for anything in the upper part of the window and
+    // the pane never moved.
+    var pane = scrollParent(marks[0]);
+    var top, height;
+    if (pane) {
+      var pr = pane.getBoundingClientRect();
+      top = pr.top;
+      height = pr.height;
+    } else {
+      top = 0;
+      height = root.innerHeight || document.documentElement.clientHeight;
+    }
+    if (!height) return;
+
     // Only scroll when the sentence is outside a comfortable middle band, so
     // reading does not jitter line by line.
-    if (r.top >= vh * 0.18 && r.bottom <= vh * 0.82) return;
+    if (r.top >= top + height * 0.18 && r.bottom <= top + height * 0.82) return;
     // Smooth scrolling fires on every sentence; for a reader who has asked the
     // OS to reduce motion that is exactly the kind of repeated movement that
     // causes trouble.
@@ -731,5 +777,5 @@
   Engine.prototype.isAttached = function () { return this._attached; };
 
   FR.Engine = Engine;
-  FR.engineUtils = { normalize: normalize, isSkipped: isSkipped, unwrapAll: unwrapAll };
+  FR.engineUtils = { normalize: normalize, isSkipped: isSkipped, unwrapAll: unwrapAll, scrollParent: scrollParent };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

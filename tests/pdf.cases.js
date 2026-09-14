@@ -304,6 +304,27 @@
       eq('the paragraph is not cut after an abbreviation', blocks.length, 1);
     })();
 
+    /* ---- a two-column page must not measure "short line" against the page ---- */
+    (function () {
+      var lines = [];
+      for (var i = 0; i < 8; i++) {
+        lines.push({ text: 'Left column line ' + i + ' continuing on.', y: 700 - i * 13,
+                     left: 56, right: 280, h: 10, col: 0 });
+      }
+      for (var j = 0; j < 8; j++) {
+        lines.push({ text: 'Right column line ' + j + ' continuing on.', y: 700 - j * 13,
+                     left: 320, right: 545, h: 10, col: 1 });
+      }
+      eq('per-column edges, not one page-wide maximum',
+         P.columnEdges(lines), { '0': 280, '1': 545 });
+
+      // Every left line is narrower than the widest RIGHT line, so a global
+      // edge made the short-last-line rule fire on all of them.
+      var blocks = P.linesToBlocks(lines, 10, false);
+      eq('a two-column page is not chopped into one block per line',
+         blocks.length <= 4, true);
+    })();
+
     /* ---- headings ---- */
     (function () {
       var body = { text: 'and so the effect was robust across samples.', h: 10, left: 50, right: 550 };

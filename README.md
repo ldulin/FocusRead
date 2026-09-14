@@ -42,7 +42,8 @@ the reading and translation features work there too.
 Three views: **Reading view** (clean text), **Original layout** (the real
 pages), and **Side by side** - the page image on the left, the reflowed text on
 the right, each scrolling on its own, with the image following along as you
-read. That last one is the one to use for a paper full of figures.
+read. **Click any line on the page image and the reading pane jumps to that
+sentence.** That view is the one to use for a paper full of figures.
 
 ---
 

@@ -319,3 +319,78 @@ body.split fr-s { scroll-margin-bottom: 120px; }
   body.split #pages { border-right: 0; border-bottom: 1px solid var(--line); height: 60vh; }
   body.split #doc { height: auto; overflow: visible; }
 }
+
+/* ---------- highlighting over a page image ----------
+   The text layer is transparent text positioned on top of a rendered canvas.
+   Anything that paints an opaque background, or makes that text visible, draws
+   a SECOND copy of the word over the real glyphs - which is what made a spoken
+   word look doubled and blot out the line underneath. Everything here is a
+   translucent wash, and the text stays invisible. */
+
+.textLayer .fr-para {
+  /* Must stay static: position:absolute would become the containing block for
+     the spans inside and collapse the whole page into the corner. */
+  position: static;
+  display: block;
+  height: 0;
+  line-height: 0;
+}
+
+.textLayer fr-s,
+.textLayer fr-b {
+  color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  font-weight: inherit !important;
+  border-radius: 2px;
+}
+
+/* The sentence being read: a wash, whatever highlight style is configured. */
+.textLayer fr-s.fr-cur,
+html.fr-hl-underline .textLayer fr-s.fr-cur,
+html.fr-hl-block .textLayer fr-s.fr-cur,
+html.fr-hl-box .textLayer fr-s.fr-cur,
+html.fr-hl-none .textLayer fr-s.fr-cur {
+  background-color: rgba(245, 197, 24, .34) !important;
+  background-image: none !important;
+  color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The word being spoken. No colour: leaving the text transparent is the whole
+   point, and the canvas glyph shows through the wash. */
+.textLayer ::highlight(fr-word) {
+  background-color: rgba(255, 138, 61, .40);
+  color: transparent;
+  text-shadow: none;
+}
+
+/* Dimming has nothing to work with over an image, and fading transparent text
+   does nothing but confuse the cascade. */
+html.fr-focus-spotlight .textLayer fr-s:not(.fr-cur) { opacity: 1 !important; }
+
+/* Lines identified as running heads or page numbers are skipped for reading;
+   they stay selectable but are never spoken or highlighted. */
+.textLayer [data-fr-furniture] { opacity: 1; }
+
+@media (prefers-color-scheme: dark) {
+  /* The page image is white regardless of the OS theme. */
+  .textLayer fr-s.fr-cur { background-color: rgba(245, 197, 24, .34) !important; }
+}
+
+/* Feedback for a click on the page image in side-by-side view. */
+body.split #pages .textLayer span,
+body.split #pages .textLayer fr-s { cursor: pointer; }
+
+.textLayer .fr-jumped {
+  background-color: rgba(31, 111, 235, .34) !important;
+  transition: background-color .25s ease;
+}
+.textLayer .fr-nomatch {
+  background-color: rgba(179, 38, 30, .26) !important;
+  transition: background-color .25s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .textLayer .fr-jumped, .textLayer .fr-nomatch { transition: none; }
+}
