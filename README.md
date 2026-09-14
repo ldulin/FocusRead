@@ -47,6 +47,22 @@ sentence.** That view is the one to use for a paper full of figures.
 
 ---
 
+## On a phone
+
+Chrome extensions do not run on mobile browsers at all, so the reader is also
+published as a plain website:
+
+**https://ldulin.github.io/FocusRead/**
+
+Open a PDF or `.docx` from your phone and you get the same sentence reading,
+focus and translation. On iOS or Android you can add it to the home screen and
+it opens without browser chrome. It is the same code as the extension - the
+reader, engine, segmenter, speech and translation files are shared, with
+`web/shim.js` standing in for the `chrome.*` APIs.
+
+What the website cannot do is read *other* web pages: that needs a content
+script, which is what the extension is for.
+
 ## Install
 
 It isn't on the Chrome Web Store. Load it yourself:
@@ -177,7 +193,8 @@ No build step and no Node.js. The source is plain ES5-compatible JavaScript
 loaded directly by the browser.
 
 ```bash
-./tests/run.sh        # everything: both suites, syntax, wiring
+./tests/run.sh              # everything: both suites, syntax, wiring
+python3 scripts/build-web.py # rebuild docs/ after changing src/ or web/
 ```
 
 That runs four checks, none of which need Node.js - they use JavaScriptCore

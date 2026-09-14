@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FocusRead - read papers aloud, sentence by sentence</title>
+<meta name="description" content="Open a PDF or Word file and read it sentence by sentence: tap to hear it, dim the rest to stay focused, translate a word or the whole page. Works on your phone.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="reader/reader.css">
+<link rel="stylesheet" href="content/content.css">
+<link rel="icon" href="icons/icon32.png">
+<link rel="apple-touch-icon" href="icons/icon128.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1b1d21">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="FocusRead">
+<link rel="stylesheet" href="mobile.css">
+</head>
+<body>
+
+<header class="bar fr-ignore">
+  <div class="brand">
+    <img src="icons/icon32.png" alt="" width="20" height="20">
+    <span>FocusRead</span>
+  </div>
+
+  <div class="file" id="fileName" title="">No document open</div>
+
+  <div class="grow"></div>
+
+  <div class="modes" id="modes" hidden>
+    <button data-mode="reflow" class="on" title="Clean, reflowed text - full reading features">Reading view</button>
+    <button data-mode="original" title="The original page images">Original layout</button>
+    <button data-mode="split" title="Both at once: read on the right, see the real page on the left">Side by side</button>
+  </div>
+
+  <div class="pager" id="pager" hidden>
+    <button id="pagePrev" title="Previous page">&#8249;</button>
+    <input id="pageNum" type="number" min="1" value="1" aria-label="Page number">
+    <span id="pageCount">/ 0</span>
+    <button id="pageNext" title="Next page">&#8250;</button>
+  </div>
+
+  <button id="openBtn" class="ghost">Open file</button>
+  <button id="optionsBtn" class="ghost" title="Settings">Settings</button>
+</header>
+
+<main id="stage">
+  <div id="splitBar" class="splitBar" hidden>
+    <label><input type="checkbox" id="syncScroll" checked> Keep the page image in step</label>
+  </div>
+  
+<section class="webnote">
+  <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
+  read it sentence by sentence - tap a sentence to hear it, tap again to stop.
+  Everything happens on your device; the file is never uploaded.</p>
+  <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
+  you need the Chrome extension, which browsers on phones cannot run -
+  <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
+  and install instructions</a>.</p>
+</section>
+
+  <section id="drop" class="drop">
+    <div class="dropInner">
+      <h1>Open a paper</h1>
+      <p class="lead">Drop a <strong>PDF</strong> or <strong>.docx</strong> here, or choose a file.</p>
+      <button id="pickBtn" class="primary">Choose a file</button>
+      <input type="file" id="fileInput" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <p class="fine">
+        Nothing is uploaded. The file is read inside your browser.
+        Translation sends only the sentences you ask for, to the provider you chose in settings.
+      </p>
+      <div id="dropError" class="error" hidden></div>
+    </div>
+  </section>
+
+  <section id="status" class="status" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <div id="statusText">Loading...</div>
+    <div class="track"><div id="statusBar" class="fill"></div></div>
+  </section>
+
+  <article id="doc" class="doc" hidden></article>
+  <div id="pages" class="pages" hidden></div>
+
+  <section id="notices" class="notices" hidden></section>
+</main>
+
+<div id="dragveil" class="dragveil" hidden><span>Drop to open</span></div>
+
+<script src="shim.js"></script>
+<script src="lib/segmenter.js"></script>
+<script src="lib/settings.js"></script>
+<script src="lib/translate.js"></script>
+<script src="content/speech.js"></script>
+<script src="content/engine.js"></script>
+<script src="content/ui.js"></script>
+<script src="content/controller.js"></script>
+<script src="reader/docx.js"></script>
+<script src="reader/pdf.js"></script>
+<script src="reader/reader.js"></script>
+<script>
+(function () {
+  var note = document.querySelector('.webnote');
+  if (!note) return;
+  note.addEventListener('click', function (e) {
+    if (e.target.tagName === 'A') return;      // let the link through
+    note.classList.toggle('open');
+  });
+})();
+</script>
+</body>
+</html>

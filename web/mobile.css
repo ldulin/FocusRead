@@ -1,0 +1,78 @@
+/*
+ * Web-build styling: phones, and an explanation of what this page is.
+ * Loaded after the shared stylesheets so it can override them.
+ */
+
+/* ---------- what this is ---------- */
+.webnote {
+  max-width: 46rem;
+  margin: 0 auto 18px;
+  padding: 12px 16px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.webnote strong { font-weight: 650; }
+.webnote a { color: var(--accent); }
+.webnote p { margin: 0 0 6px; }
+.webnote p:last-child { margin: 0; }
+
+/* ---------- phones ---------- */
+@media (max-width: 640px) {
+  .bar { gap: 6px; padding: 8px 10px; flex-wrap: wrap; }
+  .brand span { display: none; }            /* the icon is enough */
+  .file { max-width: 14ch; font-size: 12px; }
+  .modes { order: 3; width: 100%; justify-content: center; }
+  .modes button { flex: 1; padding: 8px 6px; }
+  .pager { order: 4; }
+  .bar button { min-height: 40px; }         /* finger-sized */
+
+  .dropInner { padding: 30px 20px; border-radius: 14px; }
+  .dropInner h1 { font-size: 21px; }
+
+  .doc {
+    margin: 14px 0 50vh;
+    padding: 22px 18px 40px;
+    border-radius: 0;
+    font-size: 17px;
+  }
+
+  /* Side by side has nowhere to go on a phone; the stacked fallback in
+     reader.css handles the layout, this just keeps the page pane usable. */
+  body.split #pages { height: 44vh; }
+
+  .notices { margin: 0 0 14px; border-radius: 0; font-size: 12.5px; }
+
+  /* Collapsed to its first line until tapped - it is orientation, not
+     something to re-read every time. */
+  .webnote {
+    margin: 0 0 12px;
+    border-radius: 0;
+    font-size: 12.5px;
+    max-height: 3.4em;
+    overflow: hidden;
+    position: relative;
+    cursor: pointer;
+  }
+  .webnote::after {
+    content: "more";
+    position: absolute;
+    right: 10px;
+    bottom: 2px;
+    font-size: 11px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--card);
+    color: var(--accent);
+  }
+  .webnote.open { max-height: none; cursor: auto; }
+  .webnote.open::after { content: none; }
+}
+
+/* Respect the notch and the home indicator. */
+@supports (padding: max(0px)) {
+  .bar { padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
+  .pages, .doc { padding-bottom: max(40vh, env(safe-area-inset-bottom)); }
+}
