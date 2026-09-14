@@ -58,6 +58,7 @@
   you need the Chrome extension, which browsers on phones cannot run -
   <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
   and install instructions</a>.</p>
+  <p><button type="button" id="trySample" class="ghost">Try it on a sample paper</button></p>
 </section>
 
   <section id="drop" class="drop">
@@ -102,10 +103,37 @@
 <script>
 (function () {
   var note = document.querySelector('.webnote');
-  if (!note) return;
-  note.addEventListener('click', function (e) {
-    if (e.target.tagName === 'A') return;      // let the link through
-    note.classList.toggle('open');
+  if (note) {
+    // The note is collapsed on a phone; let a tap open it.
+    note.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
+      note.classList.toggle('open');
+    });
+  }
+
+  // Somewhere to start without hunting for a file first.
+  var sample = document.getElementById('trySample');
+  if (!sample) return;
+  sample.addEventListener('click', function () {
+    sample.disabled = true;
+    sample.textContent = 'Loading sample...';
+    fetch('sample.pdf')
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+      .then(function (blob) {
+        var file = new File([blob], 'sample-paper.pdf', { type: 'application/pdf' });
+        var dt = new DataTransfer();
+        dt.items.add(file);
+        var input = document.getElementById('fileInput');
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change'));
+      })
+      .catch(function (e) {
+        sample.disabled = false;
+        sample.textContent = 'Try it on a sample paper';
+        var box = document.getElementById('dropError');
+        box.hidden = false;
+        box.textContent = 'Could not load the sample: ' + e.message;
+      });
   });
 })();
 </script>

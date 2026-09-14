@@ -86,6 +86,7 @@ WEB_NOTE = """
   you need the Chrome extension, which browsers on phones cannot run -
   <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
   and install instructions</a>.</p>
+  <p><button type="button" id="trySample" class="ghost">Try it on a sample paper</button></p>
 </section>
 """
 
@@ -128,14 +129,40 @@ def build_page(src_rel, out_name):
     html = html.replace('<button id="openDoc" class="ghost">Open a PDF or Word file</button>', '')
 
     if out_name == 'index.html':
-        # The intro note is collapsed on a phone; let a tap open it.
         html = html.replace('</body>', '''<script>
 (function () {
   var note = document.querySelector('.webnote');
-  if (!note) return;
-  note.addEventListener('click', function (e) {
-    if (e.target.tagName === 'A') return;      // let the link through
-    note.classList.toggle('open');
+  if (note) {
+    // The note is collapsed on a phone; let a tap open it.
+    note.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
+      note.classList.toggle('open');
+    });
+  }
+
+  // Somewhere to start without hunting for a file first.
+  var sample = document.getElementById('trySample');
+  if (!sample) return;
+  sample.addEventListener('click', function () {
+    sample.disabled = true;
+    sample.textContent = 'Loading sample...';
+    fetch('sample.pdf')
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+      .then(function (blob) {
+        var file = new File([blob], 'sample-paper.pdf', { type: 'application/pdf' });
+        var dt = new DataTransfer();
+        dt.items.add(file);
+        var input = document.getElementById('fileInput');
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change'));
+      })
+      .catch(function (e) {
+        sample.disabled = false;
+        sample.textContent = 'Try it on a sample paper';
+        var box = document.getElementById('dropError');
+        box.hidden = false;
+        box.textContent = 'Could not load the sample: ' + e.message;
+      });
   });
 })();
 </script>
@@ -174,6 +201,13 @@ def main():
     with open(os.path.join(OUT, 'manifest.webmanifest'), 'w', encoding='utf-8') as f:
         f.write(MANIFEST)
     print('wrote docs/manifest.webmanifest')
+
+    # The same PDF the tests use: a two-column paper with running heads, a
+    # hyphen across a line break and the punctuation that breaks naive
+    # splitters. Somewhere to start on a phone without finding a file first.
+    shutil.copy2(os.path.join(ROOT, 'tests', 'fixtures', 'paper.pdf'),
+                 os.path.join(OUT, 'sample.pdf'))
+    print('copied docs/sample.pdf')
 
     # Pages would otherwise run the whole thing through Jekyll, which ignores
     # files and folders beginning with an underscore and is pure overhead here.
