@@ -64,6 +64,18 @@
     // the URL yet, and refusing here told the reader an ordinary page was off
     // limits.
     eq('an unknown url is treated as injectable', root.isInjectable(''), true);
+
+    lines.push('\n--- what the reader can be handed ---');
+    var doc = function (u) { return root.READABLE_DOC.test(u); };
+    eq('an https PDF can be handed over', doc('https://arxiv.org/pdf/2401.12345'), true);
+    eq('so can one with a suffix', doc('https://example.org/a/paper.pdf?x=1'), true);
+    eq('and a local file', doc('file:///Users/x/Downloads/paper.pdf'), true);
+    eq('http is allowed too', doc('http://example.org/paper.pdf'), true);
+    eq('a browser page is not', doc('chrome://extensions'), false);
+    eq('nor is a data url', doc('data:application/pdf;base64,AAAA'), false);
+    eq('nor a blob url', doc('blob:https://example.org/abc'), false);
+    eq('nor an extension page', doc('chrome-extension://abc/reader.html'), false);
+    eq('nor nothing at all', doc(''), false);
     eq('undefined is treated as injectable', root.isInjectable(undefined), true);
 
     /* ---- the PDF redirect rule ---- */

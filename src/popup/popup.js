@@ -36,11 +36,7 @@
       // has none), so the content script reports its own document.contentType
       // and that answer wins.
       if (r.nativePdf || /\.pdf(\?|#|$)/i.test(r.url || '')) {
-        $('start').disabled = true;
-        $('pageNote').hidden = false;
-        $('pageNote').textContent =
-          'Chrome shows PDFs in its own viewer, which extensions cannot read. ' +
-          'Use "Open a PDF or Word file" below to read this one in FocusRead.';
+        offerPdfHandoff(r.url);
         return;
       }
 
@@ -49,6 +45,33 @@
       $('pageNote').hidden = false;
       $('pageNote').textContent = 'FocusRead cannot run on browser pages like this one.';
     });
+  }
+
+  /*
+   * The browser is showing this PDF in its own viewer, which no content script
+   * can reach - so offer to open the same address in our reader instead of
+   * telling the reader to go and find the file again by hand.
+   */
+  function offerPdfHandoff(url) {
+    $('start').disabled = true;
+    $('pageNote').hidden = false;
+    $('pageNote').textContent =
+      'This PDF is in the browser\'s own viewer, which no extension can read.';
+    var btn = $('openThis');
+    btn.hidden = false;
+    btn.disabled = false;
+    if (/^file:/i.test(url || '')) {
+      // Reading a local file needs a permission only the user can grant, and
+      // it is a checkbox rather than a prompt - so say so before the reader
+      // opens on an error instead of after.
+      if (!chrome.extension || !chrome.extension.isAllowedFileSchemeAccess) return;
+      chrome.extension.isAllowedFileSchemeAccess(function (ok) {
+        if (ok) return;
+        $('pageNote').textContent =
+          'This is a local file. Turn on "Allow access to file URLs" for ' +
+          'FocusRead on the extensions page first, then press the button.';
+      });
+    }
   }
 
   /* ---------- built-in translator status ---------- */
@@ -182,6 +205,18 @@
     });
     $('openDoc').addEventListener('click', function () {
       send({ type: 'FR_OPEN_READER' }).then(function () { window.close(); });
+    });
+    $('openThis').addEventListener('click', function () {
+      var btn = $('openThis');
+      btn.disabled = true;
+      send({ type: 'FR_OPEN_PDF' }).then(function (r) {
+        if (r && r.error) {
+          btn.disabled = false;
+          $('pageNote').textContent = 'Could not open it: ' + r.error;
+          return;
+        }
+        window.close();
+      });
     });
     $('settings').addEventListener('click', function () {
       chrome.runtime.openOptionsPage();

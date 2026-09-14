@@ -62,6 +62,26 @@
   function sourceFromLocation() {
     var search = location.search || '';
 
+    // Handed over by the toolbar button, through session storage: see
+    // openReaderWith in the service worker for why it does not travel in the
+    // URL. Only the extension can put an entry there, so this one is trusted -
+    // and consumed, so a reload does not silently fetch it a second time.
+    var h = /[?&]handoff=([A-Za-z0-9]+)/.exec(search);
+    if (h && typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+      return new Promise(function (resolve) {
+        var key = 'handoff:' + h[1];
+        chrome.storage.session.get(key, function (got) {
+          var entry = got && got[key];
+          try { chrome.storage.session.remove(key); } catch (e) { /* noop */ }
+          if (!entry || !entry.url) return resolve(null);
+          // A stale entry is not worth fetching: the tab it was made for was
+          // never opened, and the address may no longer be what was meant.
+          if (Date.now() - (entry.at || 0) > 60000) return resolve(null);
+          resolve({ url: entry.url, trusted: true });
+        });
+      });
+    }
+
     if (search.indexOf('?DNR:') === 0) {
       // Deliberately NOT decoded. regexSubstitution copies the matched URL in
       // verbatim without percent-encoding it, so decoding here would corrupt
@@ -103,6 +123,55 @@
    * arbitrary address and we would fetch it with the user's cookies attached -
    * a confused deputy that reaches intranet hosts the calling page cannot.
    */
+  /**
+   * Ask for access to one site, then try again. Returns false when this is not
+   * the kind of failure a permission would fix.
+   * @returns {boolean} whether it took over the error display
+   */
+  function offerHostAccess(url, gen) {
+    if (typeof chrome === 'undefined' || !chrome.permissions) return false;
+    var origin;
+    try {
+      var u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) return false;
+      origin = u.protocol + '//' + u.host + '/*';
+    } catch (e) { return false; }
+
+    hideStatus();
+    $('drop').hidden = false;
+    var box = $('dropError');
+    box.hidden = false;
+    box.textContent = '';
+
+    var p = document.createElement('p');
+    p.textContent = 'FocusRead could not fetch that document. It needs your ' +
+                    'permission to read files from this site:';
+    var code = document.createElement('code');
+    code.textContent = origin;
+    code.style.cssText = 'display:block;margin:8px 0;word-break:break-all;font-size:12px';
+
+    var go = document.createElement('button');
+    go.className = 'primary';
+    go.textContent = 'Allow and open';
+    go.addEventListener('click', function () {
+      go.disabled = true;
+      chrome.permissions.request({ origins: [origin] }, function (granted) {
+        if (!granted) {
+          go.disabled = false;
+          go.textContent = 'Allow and open';
+          return;
+        }
+        box.hidden = true;
+        loadFromUrl(url, true, gen === undefined ? undefined : beginLoad());
+      });
+    });
+
+    box.appendChild(p);
+    box.appendChild(code);
+    box.appendChild(go);
+    return true;
+  }
+
   function confirmUrl(url) {
     hideStatus();
     $('drop').hidden = false;
@@ -290,6 +359,10 @@
     }
     return loadPdf({ url: url }, trusted, gen).catch(function (e) {
       if (stale(gen)) return;
+      // A cross-origin fetch the extension has no host permission for fails
+      // here, and no wording can fix that - only the permission can. Offer it
+      // at the moment it is needed rather than asking for every site up front.
+      if (offerHostAccess(url, gen)) return;
       showError('Could not open that PDF: ' + (e.message || e));
     });
   }

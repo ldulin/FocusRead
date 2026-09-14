@@ -37,6 +37,21 @@ var INJECT_JS = [
 ];
 var INJECT_CSS = ['src/content/content.css'];
 
+var HANDOFF_PREFIX = 'handoff:';
+
+/*
+ * What the reader can be pointed at: http(s) and file: only, never a chrome:,
+ * data: or blob: address - those either cannot be fetched or carry content
+ * from somewhere the address bar does not show.
+ *
+ * Deliberately NOT a check for a .pdf suffix. Plenty of papers are served
+ * without one (arxiv.org/pdf/2401.12345), and the address handed over is
+ * always the active tab's own - a page the user is already looking at, so
+ * fetching it again discloses nothing new. Pointing the reader at something
+ * that is not a document just fails to parse.
+ */
+var READABLE_DOC = /^(https?:|file:)/i;
+
 function isInjectable(url) {
   // An empty url means activeTab has not revealed it to us yet - there is no
   // "tabs" permission here by design. Treat unknown as injectable and let the
@@ -158,6 +173,29 @@ chrome.contextMenus.onClicked.addListener(function (info, tab) {
 
 function openReader() {
   chrome.tabs.create({ url: chrome.runtime.getURL('src/reader/reader.html') });
+}
+
+/*
+ * Hand the PDF the browser is already showing to our own reader.
+ *
+ * The address travels through session storage rather than the query string on
+ * purpose. "?file=" is a request from an unknown caller - any page can open
+ * the reader, since it is web-accessible - so the reader treats it as a claim
+ * and asks before fetching it. Only the extension can write session storage,
+ * so an entry found there really is from this button, and the reader can act
+ * on it directly, which is the entire point of pressing it.
+ *
+ * One shot and short-lived: it is consumed by the load it was created for.
+ */
+function openReaderWith(url) {
+  var token = 'h' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  var entry = {};
+  entry[HANDOFF_PREFIX + token] = { url: String(url), at: Date.now() };
+  return chrome.storage.session.set(entry).then(function () {
+    chrome.tabs.create({
+      url: chrome.runtime.getURL('src/reader/reader.html') + '?handoff=' + token
+    });
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -308,6 +346,19 @@ chrome.runtime.onMessage.addListener(function (msg, sender, respond) {
   if (msg.type === 'FR_OPEN_READER') {
     openReader();
     return false;
+  }
+
+  if (msg.type === 'FR_OPEN_PDF') {
+    // The tab's own URL, read here rather than taken from the message: the
+    // popup is ours, but this is the one place that decides what gets opened.
+    chrome.tabs.query({ active: true, currentWindow: true }).then(function (tabs) {
+      var tab = tabs[0];
+      var url = tab && tab.url;
+      if (!url || !READABLE_DOC.test(url)) return respond({ error: 'not-a-document' });
+      openReaderWith(url).then(function () { respond({ ok: true }); },
+                               function (e) { respond({ error: String(e && e.message || e) }); });
+    });
+    return true;
   }
 
   if (msg.type === 'FR_SET_PDF_INTERCEPT') {
