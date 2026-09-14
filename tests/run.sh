@@ -28,6 +28,14 @@ run_suite "Sentence segmentation" "FR.tests.run()" \
   "$root/src/lib/segmenter.js" \
   "$here/segmenter.cases.js"
 
+run_suite "Service worker decisions" "FR.swTests.run()" \
+  "$here/sw-stub.js" \
+  "$root/src/lib/segmenter.js" \
+  "$root/src/lib/settings.js" \
+  "$root/src/lib/translate.js" \
+  "$root/src/background/service-worker.js" \
+  "$here/sw.cases.js"
+
 run_suite "PDF layout reconstruction" "FR.pdfTests.run()" \
   "$here/jsc-stubs.js" \
   "$root/src/lib/segmenter.js" \

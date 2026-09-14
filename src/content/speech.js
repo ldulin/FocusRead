@@ -153,6 +153,11 @@
     // outlives its utterance will paint estimated boundaries onto whatever is
     // speaking next.
     if (cadenceStarter) { clearTimeout(cadenceStarter); cadenceStarter = null; }
+    // And the state must go too. `token` does not change between the pieces of
+    // one sentence, so leaving it behind let resume() revive the cadence of a
+    // chunk that had already finished - marching the highlight backwards
+    // through the first half of the sentence while the second half was spoken.
+    cadenceState = null;
   }
 
   // ~180 wpm at rate 1.0 is a typical synthesiser pace.
@@ -253,6 +258,10 @@
               // drift cannot accumulate across a long sentence.
               stopCadence();
               if (!sawBoundary) {
+                // Record the pending cadence as we arm it, so a pause landing
+                // inside the 550ms window can still be resumed - for THIS
+                // piece, from its start.
+                cadenceState = { text: chunk, base: piece.start, rate: rate, mine: mine, emit: emit, i: 0 };
                 cadenceStarter = setTimeout(function () {
                   cadenceStarter = null;
                   if (mine === token && !sawBoundary) {
@@ -346,7 +355,16 @@
 
   function pause() {
     if (!synth) return false;
-    try { synth.pause(); stopHeartbeat(); stopCadence(); return true; } catch (e) { return false; }
+    try {
+      // stopCadence() clears cadenceState; keep a snapshot so resume() can pick
+      // the highlight back up where it left off.
+      var snap = (cadence || cadenceStarter) ? cadenceState : null;
+      synth.pause();
+      stopHeartbeat();
+      stopCadence();
+      cadenceState = snap;
+      return true;
+    } catch (e) { return false; }
   }
 
   function resume() {

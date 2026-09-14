@@ -38,7 +38,10 @@
     'builtin-pair': 'Chrome cannot translate this language pair on this device. Pick another engine in settings.',
     'builtin-needs-gesture': 'Chrome needs to download a language pack. Open the FocusRead popup and click Download.',
     'builtin-timeout': 'The translator stopped responding. Check your connection, or pick another engine.',
-    provider: 'The translation service returned an error. Try again, or switch provider in settings.'
+    provider: 'The translation service returned an error. Try again, or switch provider in settings.',
+    network: 'Could not reach the translation service. Check your connection, or that FocusRead is allowed to contact it.',
+    offline: 'You appear to be offline. Chrome\'s built-in translator works without a connection - you can switch to it in settings.',
+    error: 'Translation failed. Try again, or switch provider in settings.'
   };
 
   function friendlyError(result) {
@@ -68,6 +71,7 @@
     this._boundKeys = null;
     this._rulerRaf = null;
     this._playGeneration = 0;    // invalidates in-flight auto-advance chains
+    this._bilingualGen = 0;      // invalidates in-flight translation batches
   }
 
   /* ------------------------------------------------------------------ *
@@ -113,7 +117,7 @@
         self.ui.setProgress(null);
         self.engine.watch();
         self.ui.setState({ total: count, index: 0, playing: false, rate: s.rate,
-                           focus: s.focusMode !== 'off', bilingual: s.bilingual });
+                           focus: s.focusMode, bilingual: s.bilingual });
         if (!count) {
           self.ui.toast('FocusRead found no readable text on this page.');
         } else {
@@ -197,7 +201,7 @@
     st.setProperty('--fr-bi-scale', String(s.bilingualScale));
 
     if (this.ui) {
-      this.ui.setState({ rate: s.rate, focus: s.focusMode !== 'off', bilingual: s.bilingual });
+      this.ui.setState({ rate: s.rate, focus: s.focusMode, bilingual: s.bilingual });
     }
   };
 
@@ -254,7 +258,7 @@
         };
 
         // Hear it again in your own language before moving on.
-        if (s.speakTranslation) self._speakTranslation(rec).then(advance, advance);
+        if (s.speakTranslation) self._speakTranslation(rec, generation).then(advance, advance);
         else advance();
       },
       onerror: function (e) {
@@ -274,9 +278,13 @@
    * it is not already on screen. Never rejects - a failed translation should
    * pause reading, not end it.
    */
-  Controller.prototype._speakTranslation = function (rec) {
+  Controller.prototype._speakTranslation = function (rec, generation) {
     var self = this;
     var s = this.settings;
+    var mine = function () {
+      return self.active && self.playing &&
+             (generation === undefined || self._playGeneration === generation);
+    };
     // Only render it if bilingual mode is already showing translations;
     // otherwise "read the translation aloud" would silently also switch on
     // inline translation, which is a different feature.
@@ -285,7 +293,10 @@
       : this.translateSentence(rec.i, !!s.bilingual);
 
     return have.then(function (text) {
-      if (!text || !self.playing) return;
+      // Fetching a translation can take a second or more. If the reader clicked
+      // a different sentence meanwhile, speaking this one would cancel the new
+      // sentence mid-word AND orphan its chain, wedging playback entirely.
+      if (!text || !mine()) return;
       return FR.speech.speak(text, {
         rate: s.rate,
         pitch: s.pitch,
@@ -436,6 +447,10 @@
    */
   Controller.prototype.setBilingual = function (on) {
     var self = this;
+    // Any batch already in flight belongs to the previous state. Without this,
+    // a request issued while bilingual was ON resolves after it is switched
+    // OFF and re-creates every translation element that was just removed.
+    var gen = ++this._bilingualGen;
     if (on && this.allowBilingual === false) {
       this.ui.toast('Inline translation needs Reading view - Original layout has no room between the lines.', 4200);
       this.ui.setState({ bilingual: false });
@@ -447,7 +462,14 @@
 
     if (!on) {
       if (this._io) { this._io.disconnect(); this._io = null; }
+      clearTimeout(this._bilingualTimer);
       this._pendingBilingual = [];
+      // Clear the per-mark stamps too. Leaving them meant a NEW observer
+      // skipped every sentence, so turning bilingual off and on again left the
+      // button reading "on" with the feature silently dead.
+      this.engine.sentences.forEach(function (rec) {
+        if (rec.marks[0]) delete rec.marks[0].__frObserved;
+      });
       this.engine.clearTranslations();
       return;
     }
@@ -466,6 +488,29 @@
     }, { rootMargin: '250px 0px' });
 
     this._observeForBilingual();
+    // Don't rely on the observer alone for the first screen. IntersectionObserver
+    // callbacks are throttled while a tab is hidden, so enabling bilingual mode
+    // in a background tab (or from a restored session) could leave the feature
+    // silently doing nothing until something happened to scroll.
+    this._queueVisible();
+  };
+
+  /** Queue every sentence currently within (or near) the viewport, by geometry. */
+  Controller.prototype._queueVisible = function () {
+    if (!this.engine) return;
+    var vh = root.innerHeight || document.documentElement.clientHeight || 0;
+    var margin = 250;
+    var queued = 0;
+    for (var i = 0; i < this.engine.sentences.length; i++) {
+      var mark = this.engine.sentences[i].marks[0];
+      if (!mark) continue;
+      var r;
+      try { r = mark.getBoundingClientRect(); } catch (e) { continue; }
+      if (!r.height && !r.width) continue;
+      if (r.bottom < -margin || r.top > vh + margin) continue;
+      this._queueBilingual(i);
+      if (++queued >= 40) break;            // one screenful is plenty
+    }
   };
 
   /** Observe every sentence that is not being watched yet. */
@@ -482,6 +527,7 @@
 
   Controller.prototype._queueBilingual = function (i) {
     var self = this;
+    if (!this.settings.bilingual) return;
     if (this._pendingBilingual.indexOf(i) === -1) this._pendingBilingual.push(i);
     clearTimeout(this._bilingualTimer);
     this._bilingualTimer = setTimeout(function () { self._flushBilingual(); }, 220);
@@ -508,7 +554,10 @@
       if (r.transEl) r.transEl.classList.add('fr-t-pending');
     });
 
+    var gen = this._bilingualGen;
     this.translate(fresh.map(function (r) { return r.text; })).then(function (res) {
+      // Superseded: bilingual was toggled while this batch was in flight.
+      if (gen !== self._bilingualGen || !self.settings.bilingual) return;
       var firstError = null;
       fresh.forEach(function (r, k) {
         var out = res[k] || { ok: false, error: 'No result' };
@@ -669,16 +718,28 @@
       // reading session has to be stopped properly first - otherwise the
       // toolbar still shows Play and the engine's auto-advance is left armed.
       'pop-speak-src': function () {
+        if (!self._lastSelection) {
+          self.ui.toast('Nothing is selected.');
+          return;
+        }
         self.stop();
-        FR.speech.speak(self._lastSelection || '', {
+        FR.speech.speak(self._lastSelection, {
           rate: self.settings.rate, lang: self.docLang(),
           maxChars: self.settings.maxUtteranceChars, localOnly: self.settings.localVoicesOnly,
           onerror: function (err) { self.ui.toast('Could not read that aloud (' + err.error + ').'); }
         }).catch(function () { /* reported above */ });
       },
       'pop-speak-out': function () {
+        // Check BEFORE stopping: speak('') returns early without bumping the
+        // speech token, so stopping first would silently end the reading
+        // session and then speak nothing at all. _lastTranslation is empty
+        // whenever the translation is still in flight or failed.
+        if (!self._lastTranslation) {
+          self.ui.toast('There is no translation to read yet.');
+          return;
+        }
         self.stop();
-        FR.speech.speak(self._lastTranslation || '', {
+        FR.speech.speak(self._lastTranslation, {
           rate: self.settings.rate, lang: self.settings.targetLang,
           voiceURI: '', maxChars: self.settings.maxUtteranceChars, localOnly: false,
           onerror: function () {
@@ -757,27 +818,55 @@
   };
 
   var TYPING = { INPUT: 1, TEXTAREA: 1, SELECT: 1, OPTION: 1 };
-  var ACTIVATABLE = { BUTTON: 1, A: 1, SUMMARY: 1, DETAILS: 1, LABEL: 1, VIDEO: 1, AUDIO: 1 };
-  var INTERACTIVE_ROLE = /^(button|link|textbox|searchbox|combobox|listbox|menuitem|menuitemcheckbox|menuitemradio|checkbox|radio|slider|spinbutton|switch|tab|option)$/;
+
+  // Only elements that genuinely consume Space or an arrow key. A link is NOT
+  // one of them - it activates on Enter, which this extension never binds - and
+  // including <a> disabled every shortcut whenever focus sat inside a citation
+  // link, which on a paper is most of the time. LABEL and DETAILS are not
+  // focusable at all and only ever appeared as ancestors.
+  var ACTIVATABLE = { BUTTON: 1, SUMMARY: 1, VIDEO: 1, AUDIO: 1 };
+
+  // Widgets that own the arrow keys. "link" is deliberately absent, for the
+  // same reason <a> is.
+  var INTERACTIVE_ROLE = /^(button|textbox|searchbox|combobox|listbox|menuitem|menuitemcheckbox|menuitemradio|checkbox|radio|slider|spinbutton|switch|tab|option)$/;
 
   /**
-   * Would this element normally act on Space or an arrow key itself?
+   * Is this element typing-capable, or a widget that owns the arrow keys?
    *
-   * Getting this wrong is worse than it sounds: Space on a focused button, a
-   * search box inside the page's own shadow DOM, or a custom control with
-   * role="textbox" would all be eaten by the reader.
+   * Checked all the way up the composed path: an INPUT cannot contain focusable
+   * descendants, and a composite widget may put focus on an inner handle while
+   * the role sits on the container.
    */
-  function isInteractive(el) {
+  function isTypingTarget(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (TYPING[String(el.tagName || '').toUpperCase()]) return true;
+    if (el.isContentEditable) return true;
+    var role = el.getAttribute && el.getAttribute('role');
+    return !!(role && INTERACTIVE_ROLE.test(role));
+  }
+
+  /**
+   * Does the FOCUSED element itself act on Space?
+   *
+   * Only ever applied to the innermost target, never to ancestors: a tabindex
+   * on a wrapper (or on <body>, a common accessibility pattern) must not
+   * disable the reader across the whole page.
+   */
+  function isActivationTarget(el) {
     if (!el || el.nodeType !== 1) return false;
     var tag = String(el.tagName || '').toUpperCase();
-    if (TYPING[tag] || ACTIVATABLE[tag]) return true;
-    if (el.isContentEditable) return true;
-    if (el.getAttribute) {
-      var role = el.getAttribute('role');
-      if (role && INTERACTIVE_ROLE.test(role)) return true;
-      if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
-    }
-    return false;
+    if (tag === 'BODY' || tag === 'HTML') return false;
+    if (tag === 'A') return false;                 // activates on Enter, not Space
+    if (ACTIVATABLE[tag]) return true;
+    // A focusable custom control may well use Space, so tabindex counts - with
+    // one exception: role="link" is a link, and a link never acts on Space.
+    // Without this, removing "link" from the typing roles would be undone by
+    // the tabindex every such element carries.
+    var role = el.getAttribute && el.getAttribute('role');
+    if (role === 'link') return false;
+    return !!(el.getAttribute &&
+              el.hasAttribute('tabindex') &&
+              el.getAttribute('tabindex') !== '-1');
   }
 
   Controller.prototype._onKey = function (e) {
@@ -789,11 +878,13 @@
     // like a plain <div> and have its typing stolen.
     var path = (e.composedPath && e.composedPath()) || [e.target];
 
+    if (isActivationTarget(path[0])) return;     // a focused button, summary, ...
+
     for (var i = 0; i < path.length; i++) {
       var node = path[i];
       if (node === this.ui.host) return;          // our own controls
       if (node === document || node === window) break;
-      if (isInteractive(node)) return;
+      if (isTypingTarget(node)) return;
     }
 
     switch (e.key) {

@@ -84,23 +84,49 @@
     return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
   }
 
-  /** Normalise a page's text items into flat, comparable boxes. */
+  /**
+   * Normalise a page's text items into flat, comparable boxes.
+   *
+   * Almost all PDFs - including landscape ones with a /Rotate entry - lay text
+   * out along the unrotated +x axis, so unrotated user space IS reading space
+   * and nothing needs doing. The exception is content authored for a rotated
+   * presentation, where the TEXT MATRIX itself carries the rotation and the
+   * advance runs vertically in user space. Grouping those by y would collect a
+   * visual column of glyphs into one "line" and emit unreadable fragments, so
+   * the axes are swapped for them.
+   *
+   * @returns {{boxes:Array, rotatedRuns:number}}
+   */
   function toBoxes(textContent) {
     var out = [];
+    var rotatedRuns = 0;
+
     textContent.items.forEach(function (it) {
       if (!it.str || !it.str.length) return;
       var t = it.transform;
-      var h = Math.abs(it.height || t[3] || 0) || Math.abs(t[0]) || 10;
-      out.push({
-        str: it.str,
-        x: t[4],
-        y: t[5],
-        w: it.width || 0,
-        h: h,
-        eol: !!it.hasEOL
-      });
+      var a = t[0], b = t[1], c = t[2], d = t[3];
+      var h = Math.abs(it.height || d || 0) || Math.abs(a) || 10;
+
+      // A clearly vertical advance: |b| dominates |a|.
+      if (Math.abs(b) > Math.abs(a) * 2) {
+        rotatedRuns++;
+        h = Math.abs(it.height || c || 0) || Math.abs(b) || 10;
+        // 90 CW (b < 0): reading runs along decreasing user-space y.
+        // 90 CCW (b > 0): along increasing y. Either way the along-line axis
+        // becomes x and the line-stacking axis becomes y.
+        var alongLine = b < 0 ? -t[5] : t[5];
+        var acrossLine = b < 0 ? -t[4] : t[4];
+        out.push({
+          str: it.str, x: alongLine, y: acrossLine,
+          w: it.width || 0, h: h, eol: !!it.hasEOL, rotated: true
+        });
+        return;
+      }
+
+      out.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, h: h, eol: !!it.hasEOL });
     });
-    return out;
+
+    return { boxes: out, rotatedRuns: rotatedRuns };
   }
 
   /**
@@ -131,11 +157,21 @@
       for (var k = from; k <= to; k++) covered[k]++;
     });
 
+    // A gutter is *nearly* empty, not exactly empty. Requiring zero meant a
+    // single full-width run anywhere on the page - the title block, a wide
+    // figure caption, a licence footer - raised every middle bin to one and
+    // killed detection for the whole page, so its two columns were then read
+    // interleaved line by line.
+    // The floor matters on a sparse page: 2% of 50 runs is 1, which a title
+    // plus a caption plus a footer would already exceed. A real page has
+    // hundreds of runs, where the percentage dominates.
+    var tolerance = Math.max(3, Math.round(boxes.length * 0.02));
+
     // The gutter has to sit near the middle of the page.
     var lo = Math.floor(BINS * 0.34), hi = Math.ceil(BINS * 0.66);
     var best = null, runStart = -1;
     for (var j = lo; j <= hi; j++) {
-      if (!covered[j]) {
+      if (covered[j] <= tolerance) {
         if (runStart === -1) runStart = j;
         if (!best || (j - runStart) > (best.end - best.start)) best = { start: runStart, end: j };
       } else {
@@ -298,8 +334,22 @@
     var t = String(text).trim();
     if (!t || t.length > 70) return false;              // heads are short
     if (/^[\p{Ll}]/u.test(t)) return false;             // a sentence continuing
+    if (PAGE_NUMBER.test(t)) return true;               // a bare page number is
     if (/[.!?]["'\u2019\u201D)\]]?$/.test(t) && t.split(/\s+/).length > 6) return false;
-    return true;
+
+    // normaliseForRepeat() turns every digit run into a placeholder, so
+    // "Problem 1" ... "Problem 8" all collapse to one key and look repeated.
+    // On a problem set or a slide export those are the HEADINGS - deleting
+    // them removes the only thing telling the reader where they are.
+    //
+    // Judge what is left once the numbers are gone: a real running head is
+    // either structured (separators, volume/issue/page markers) or several
+    // words long. One word plus a number is a heading.
+    if (/[|\u00B7\u2022\u2014\u2013\/]|\b(vol|no|pp|issue|doi|isbn|issn)\b/i.test(t)) return true;
+
+    var residue = t.replace(/\d+/g, ' ').replace(/\s+/g, ' ').trim();
+    var tokens = residue ? residue.split(/\s+/).filter(Boolean) : [];
+    return tokens.length >= 2;
   }
 
   /* ------------------------------------------------------------------ *
@@ -420,6 +470,7 @@
     var notices = [];
     var perPage = [];
     var allHeights = [];
+    var rotatedPages = 0;
 
     var chain = Promise.resolve();
     for (var n = 1; n <= total; n++) {
@@ -432,7 +483,9 @@
             // test is measured against the height instead.
             var base = page.getViewport({ scale: 1, rotation: 0 });
             return page.getTextContent().then(function (tc) {
-              var boxes = toBoxes(tc);
+              var extracted = toBoxes(tc);
+              var boxes = extracted.boxes;
+              if (extracted.rotatedRuns) rotatedPages++;
               var gutter = detectColumns(boxes, base.width);
               var lines = toLines(boxes, gutter);
               lines.forEach(function (ln) { allHeights.push(ln.h); });
@@ -456,6 +509,7 @@
       var bodyHeight = median(allHeights) || 10;
       var heads = opts.stripRunningHeads ? findRunningHeads(perPage) : {};
 
+      var removedLines = 0;
       var kept = perPage.map(function (p) {
         var h = p.height || 0;
         var topBand = h * 0.90, bottomBand = h * 0.10;
@@ -466,8 +520,9 @@
           // mid-page line examined instead.
           var atEdge = h ? (ln.y >= topBand || ln.y <= bottomBand) : true;
           if (!atEdge) return true;
-          if (PAGE_NUMBER.test(ln.text)) return false;
-          return !heads[normaliseForRepeat(ln.text)];
+          if (PAGE_NUMBER.test(ln.text)) { removedLines++; return false; }
+          if (heads[normaliseForRepeat(ln.text)]) { removedLines++; return false; }
+          return true;
         });
         return { page: p.page, lines: lines, columns: p.columns };
       });
@@ -485,10 +540,23 @@
       // Stitch paragraphs cut in half by a column break or a page break.
       var merged = mergeContinuations(blocks);
 
+      if (rotatedPages) {
+        // Say so: the axis swap is a best effort, and a reader who sees
+        // scrambled text deserves to know why rather than assuming the
+        // extension is simply broken.
+        notices.push(rotatedPages + ' page' + (rotatedPages === 1 ? ' has' : 's have') +
+                     ' rotated text. Reading order on ' + (rotatedPages === 1 ? 'it' : 'them') +
+                     ' may be wrong - use Original layout if it looks scrambled.');
+      }
+
       var twoCol = kept.filter(function (p) { return p.columns === 2; }).length;
       if (twoCol) notices.push(twoCol + ' of ' + total + ' pages were read as two columns.');
-      var removed = Object.keys(heads).length;
-      if (removed) notices.push('Removed ' + removed + ' repeated header/footer line' + (removed === 1 ? '' : 's') + '.');
+      // Count the lines actually dropped, not the number of distinct patterns:
+      // "Removed 1" when eight lines went is worse than saying nothing.
+      if (removedLines) {
+        notices.push('Removed ' + removedLines + ' repeated header, footer or page-number line' +
+                     (removedLines === 1 ? '' : 's') + '.');
+      }
       if (!merged.length) {
         notices.push('No text layer found. This PDF is probably a scan - it would need OCR, which FocusRead does not do.');
       }
@@ -531,14 +599,22 @@
       // Insert in the right place up front so page order is correct, then
       // remove it again if rendering fails - the old code appended
       // unconditionally and left a blank white rectangle behind on error.
+      //
+      // If the placeholder is gone the view was rebuilt (a mode switch, a new
+      // document) while this getPage was in flight. Appending anyway would
+      // stack an orphaned page at the end of the fresh list, so drop it.
       if (placeholder && placeholder.parentNode === container) {
         container.insertBefore(wrap, placeholder);
+      } else if (placeholder) {
+        page.cleanup();
+        return null;
       } else {
         container.appendChild(wrap);
       }
 
       var ctx = canvas.getContext('2d');
       ctx.scale(dpr, dpr);
+
 
       var renderArgs = { canvasContext: ctx, canvas: canvas, viewport: viewport };
       return page.render(renderArgs).promise.then(function () {

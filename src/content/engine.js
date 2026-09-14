@@ -6,8 +6,12 @@
  *
  * Design notes
  * ------------
- * - We only ever ADD wrapper elements; no text is rewritten. That makes
- *   detach() a perfect restore: unwrap every marker and normalize().
+ * - We only ever ADD wrapper elements; no text is rewritten, so detach()
+ *   restores the markup exactly. One caveat: normalize() merges adjacent text
+ *   nodes inside the blocks we touched, so a page holding a reference to one
+ *   of several adjacent Text nodes in a scanned paragraph (React/Vue often do)
+ *   gets that reference merged away. Only touched blocks are normalized, never
+ *   the whole tree.
  * - Sentences are wrapped in <fr-s data-i="N">. One sentence can produce
  *   SEVERAL marks when it spans inline elements ("the <em>key</em> result."),
  *   so a mark list - not a single node - is the unit of highlight.
@@ -149,12 +153,38 @@
       entry.text += node.nodeValue;
     }
 
-    return blocks.filter(function (b) {
+    var kept = blocks.filter(function (b) {
       if (b.text.trim().length < self.opts.minBlockChars) return false;
       // Skip anything not actually painted (collapsed menus, hidden tabs).
       try { if (!b.el.getClientRects().length) return false; } catch (e) { /* detached */ }
       return true;
     });
+
+    // A run interrupted only by runs we then DISCARDED was never really
+    // interrupted. A display:none tooltip inside a sentence - routine in body
+    // copy - otherwise leaves the paragraph permanently split into two
+    // sentences, read aloud as two fragments and translated as two fragments.
+    //
+    // Two runs of the same element can only become adjacent here if everything
+    // between them was dropped, so "<div>intro <p>para</p> tail</div>" still
+    // splits correctly: the inner paragraph's run survives between them.
+    var merged = [];
+    for (var i = 0; i < kept.length; i++) {
+      var cur = kept[i], prev = merged[merged.length - 1];
+      if (prev && prev.el === cur.el) {
+        for (var j = 0; j < cur.pieces.length; j++) {
+          var pc = cur.pieces[j];
+          // Re-base onto the merged text: _processBlock maps sentence offsets
+          // back through piece.start, so a straight push would wrap the wrong
+          // ranges.
+          prev.pieces.push({ node: pc.node, start: prev.text.length + pc.start, len: pc.len });
+        }
+        prev.text += cur.text;
+        continue;
+      }
+      merged.push(cur);
+    }
+    return merged;
   };
 
   /* ------------------------------------------------------------------ *
@@ -369,7 +399,11 @@
 
     try {
       marks[0].scrollIntoView({
-        behavior: reduce ? 'auto' : 'smooth',
+        // 'instant', not 'auto': 'auto' defers to the scrolling box's computed
+        // scroll-behavior, and a site that ships `html{scroll-behavior:smooth}`
+        // would still animate every sentence advance for a reader who asked
+        // the OS for less motion.
+        behavior: reduce ? 'instant' : 'smooth',
         block: 'center',
         inline: 'nearest'
       });
@@ -456,6 +490,27 @@
    * Inline translation (bilingual mode)
    * ------------------------------------------------------------------ */
 
+  /**
+   * Is `el` the last meaningful child of its parent?
+   *
+   * Trailing whitespace text nodes are ignored, because pretty-printed markup
+   * ("<a>Link sentence. </a>", or a link broken across source lines) always
+   * leaves one - and treating that as "not the tail" would push the
+   * translation back inside the link, which is the case the climb exists for.
+   * Our own inserted elements are ignored for the same reason.
+   */
+  function isTailOfParent(el) {
+    for (var n = el.nextSibling; n; n = n.nextSibling) {
+      if (n.nodeType === 3) {
+        if (n.nodeValue && n.nodeValue.trim()) return false;
+        continue;
+      }
+      if (n.nodeType === 1 && (n.tagName === 'FR-T' || n.tagName === 'FR-UI' || n.tagName === 'FR-SPACER')) continue;
+      return false;
+    }
+    return true;
+  }
+
   Engine.prototype.setTranslation = function (i, text) {
     var rec = this.get(i);
     if (!rec) return;
@@ -473,13 +528,35 @@
     node.style.display = text ? '' : 'none';
 
     // Insert after the last mark - but never INSIDE a link or another inline
-    // wrapper, which would make the whole translation clickable and inherit
-    // the link's styling. Climb to the outermost inline ancestor first.
+    // wrapper, which would make the whole translation clickable and inherit the
+    // link's styling.
+    //
+    // The climb must stop unless this mark is the LAST thing in the wrapper.
+    // "<p><span>One. Two. Three.</span></p>" is an everyday CMS shape, and
+    // climbing unconditionally put all three translations after the span - in
+    // reverse order, because each insert used anchor.nextSibling.
     var anchor = last;
     while (anchor.parentElement &&
            anchor.parentElement !== rec.blockEl &&
-           this._isInline(anchor.parentElement)) {
+           this._isInline(anchor.parentElement) &&
+           isTailOfParent(anchor)) {
       anchor = anchor.parentElement;
+    }
+
+    // The climb only escapes INLINE ancestors, so a display:block <a> (a whole
+    // DOI line in a reference list, say) still leaves us inside the link. A
+    // clickable translation that navigates away on a mis-click is worse than
+    // an imperfect position, so refuse the clicks instead.
+    var link = anchor.parentElement && anchor.parentElement.closest
+      ? anchor.parentElement.closest('a[href]')
+      : null;
+    node.classList.toggle('fr-t-in-link', !!link);
+    if (link && !node.__frGuarded) {
+      node.__frGuarded = true;
+      node.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }, true);
     }
     if (node.previousSibling !== anchor || !node.parentNode) {
       this._mutating = true;
@@ -512,6 +589,13 @@
     this._mutating = true;
     if (!on) {
       unwrapAll(this.root, 'FR-B');
+      // unwrapAll leaves the text nodes it un-nested still split. Merge them
+      // back inside each mark, so the page is not left fragmented until some
+      // later operation happens to repair it.
+      var marks0 = this.root.querySelectorAll('fr-s');
+      for (var m0 = 0; m0 < marks0.length; m0++) {
+        try { marks0[m0].normalize(); } catch (e) { /* noop */ }
+      }
       this._mutating = false;
       return;
     }

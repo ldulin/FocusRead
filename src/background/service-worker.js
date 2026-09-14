@@ -171,10 +171,31 @@ function openReader() {
 
 var AUTO_SCRIPT_ID = 'focusread-auto';
 
+/**
+ * Which URL patterns should auto-activate.
+ *
+ * The scheme segment of a granted origin is NOT literally "http": the options
+ * page requests the all-sites match pattern, and getAll() returns it verbatim
+ * with a leading asterisk. Filtering for /^https?:/ dropped it and left only
+ * the extension's own manifest host_permissions - so the feature registered
+ * the whole reader bundle onto the two translation API endpoints and fired
+ * nowhere the reader actually browses.
+ *
+ * Subtracting host_permissions also matters on the way back: if the user
+ * revokes all-sites access while the setting is still on, `matches` comes back
+ * empty and the caller correctly unregisters instead of re-registering onto
+ * those API hosts.
+ */
 function autoMatches(settings, granted) {
   if (settings.autoActivate) {
-    // Only where the user actually granted access.
-    return (granted.origins || []).filter(function (o) { return /^https?:/.test(o); });
+    var origins = granted.origins || [];
+    var own = chrome.runtime.getManifest().host_permissions || [];
+    if (origins.indexOf('*://*/*') !== -1 || origins.indexOf('<all_urls>') !== -1) {
+      return ['*://*/*'];
+    }
+    return origins.filter(function (o) {
+      return own.indexOf(o) === -1 && /^(\*|https?):\/\//.test(o);
+    });
   }
   return (settings.autoActivateHosts || [])
     .map(function (h) { return String(h).trim(); })
@@ -331,6 +352,16 @@ function pdfRules() {
 }
 
 function setPdfIntercept(enabled) {
+  // The namespace is optional, so it is absent until the permission is
+  // granted. Dereferencing it threw synchronously - before any promise existed
+  // - so the caller's .then never ran and the checkbox stuck.
+  if (!chrome.declarativeNetRequest) {
+    return FR.settings.set({ pdfInterceptLinks: false })
+      .then(function () {
+        return { ok: !enabled, enabled: false,
+                 error: enabled ? 'FocusRead was not granted permission to redirect requests.' : undefined };
+      });
+  }
   if (!enabled) {
     return chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [PDF_RULE_ID] })
       .then(function () { return FR.settings.set({ pdfInterceptLinks: false }); })

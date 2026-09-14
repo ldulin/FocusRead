@@ -65,6 +65,10 @@
   var memOrder = null;        // [key] insertion order
   var flushTimer = null;
 
+  function nowMs() {
+    return (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+  }
+
   function hash(s) {          // FNV-1a, base36
     var h = 0x811c9dc5;
     for (var i = 0; i < s.length; i++) {
@@ -102,8 +106,35 @@
     if (flushTimer) return;
     flushTimer = setTimeout(function () {
       flushTimer = null;
-      var payload = {}; payload[CACHE_KEY] = { map: memCache, order: memOrder };
-      chrome.storage.local.set(payload);
+      // Read-modify-write. Persisting our whole map wholesale discarded
+      // everything another context (the service worker, a second tab) had
+      // written since we last read - so those translations were fetched, and
+      // charged, all over again.
+      chrome.storage.local.get(CACHE_KEY, function (r) {
+        var stored = (r && r[CACHE_KEY]) || {};
+        var storedMap = stored.map || {};
+        var storedOrder = stored.order || Object.keys(storedMap);
+
+        Object.keys(storedMap).forEach(function (k) {
+          if (memCache[k] === undefined) {
+            memCache[k] = storedMap[k];
+            memOrder.push(k);
+          }
+        });
+        // Keep the other realm's ordering for shared keys so eviction stays
+        // roughly least-recently-added across contexts.
+        var seen = {};
+        var order = storedOrder.concat(memOrder).filter(function (k) {
+          if (seen[k] || memCache[k] === undefined) return false;
+          seen[k] = 1;
+          return true;
+        });
+        while (order.length > CACHE_MAX) delete memCache[order.shift()];
+        memOrder = order;
+
+        var payload = {}; payload[CACHE_KEY] = { map: memCache, order: memOrder };
+        chrome.storage.local.set(payload);
+      });
     }, 1500);
   }
 
@@ -122,8 +153,20 @@
       var next = changes[CACHE_KEY].newValue;
       if (!next) { memCache = {}; memOrder = []; return; }
       if (flushTimer) return;              // our own pending write; keep ours
-      memCache = next.map || {};
-      memOrder = next.order || Object.keys(memCache);
+      // Merge rather than replace. Another context's snapshot was taken before
+      // our last flush, so adopting it wholesale drops entries we already
+      // persisted and they get re-fetched (and re-charged) next time.
+      var incoming = next.map || {};
+      Object.keys(incoming).forEach(function (k) {
+        if (memCache[k] === undefined) {
+          memCache[k] = incoming[k];
+          memOrder.push(k);
+        }
+      });
+      while (memOrder.length > CACHE_MAX) {
+        var oldest = memOrder.shift();
+        if (memOrder.indexOf(oldest) === -1) delete memCache[oldest];
+      }
     });
   }
 
@@ -306,6 +349,13 @@
 
   var MYMEMORY_MAX_BYTES = 480;      // a little under the 500-byte cap
 
+  // Once the daily allowance is gone every further request fails the same way.
+  // A per-text flag only stopped the remaining CHUNKS of one sentence; a page
+  // of 300 sentences still fired 300 doomed requests. This latch is
+  // module-scope so the whole batch - and the next few minutes - stop.
+  var myMemoryBlockedUntil = 0;
+  var MYMEMORY_COOLDOWN = 10 * 60 * 1000;
+
   function utf8Length(s) {
     if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(s).length;
     return unescape(encodeURIComponent(s)).length;
@@ -393,7 +443,20 @@
 
   function viaMyMemory(texts, src, tgt, cfg) {
     var pair = (src === 'auto' ? 'en' : lang('mymemory', src)) + '|' + lang('mymemory', tgt);
+
+    if (myMemoryBlockedUntil && nowMs() < myMemoryBlockedUntil) {
+      return Promise.resolve(texts.map(function () {
+        return {
+          ok: false, code: 'quota',
+          error: 'MyMemory\'s free daily allowance is used up. Add your email in settings to raise it, or switch translation engine.'
+        };
+      }));
+    }
+
     return pooled(texts, 3, function (t) {
+      if (myMemoryBlockedUntil && nowMs() < myMemoryBlockedUntil) {
+        return { ok: false, code: 'quota', error: 'MyMemory\'s free daily allowance is used up.' };
+      }
       var chunks = byteChunks(t, MYMEMORY_MAX_BYTES);
       // Stop at the first failure. Once the daily quota is gone every
       // remaining chunk fails too, and firing them anyway just burns requests
@@ -404,6 +467,7 @@
         return myMemoryOnce(c, pair, cfg).then(
           function (text) { return { ok: true, text: text }; },
           function (e) {
+            if (e.code === 'quota') myMemoryBlockedUntil = nowMs() + MYMEMORY_COOLDOWN;
             failed = { ok: false, code: e.code || 'provider', error: String(e.message || e) };
             return failed;
           });
@@ -538,11 +602,32 @@
     }).then(function (j) {
       var content = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
       if (!content) return texts.map(function () { return { ok: false, code: 'provider', error: 'Empty LLM response' }; });
+      // FIRST occurrence wins, and a marker outside the range we sent is
+      // discarded. A model that can be talked into emitting a second
+      // "<<FR7>> ..." line would otherwise overwrite sentence 7's real
+      // translation - and cachePut would then store the substituted text under
+      // sentence 7's key and re-serve it for the life of the cache.
       var byIndex = {};
+      var duplicated = false;
       String(content).split('\n').forEach(function (line) {
         var m = /^\s*<<FR(\d+)>>\s*([\s\S]*)$/.exec(line);
-        if (m && m[2].trim()) byIndex[Number(m[1])] = m[2].trim();
+        if (!m || !m[2].trim()) return;
+        var n = Number(m[1]);
+        if (!(n >= 1 && n <= texts.length)) return;        // out of range
+        if (byIndex[n] !== undefined) { duplicated = true; return; }
+        byIndex[n] = m[2].trim();
       });
+
+      if (duplicated) {
+        // Not a transport hiccup: the reply did not follow the contract, so
+        // none of it can be trusted into the cache.
+        return texts.map(function () {
+          return {
+            ok: false, code: 'provider',
+            error: 'The model returned a malformed reply. If this repeats, switch translation engine in settings.'
+          };
+        });
+      }
       return texts.map(function (_, i) {
         return byIndex[i + 1]
           ? { ok: true, text: byIndex[i + 1] }
@@ -555,12 +640,31 @@
    * Concurrency helpers
    * ------------------------------------------------------------------ */
 
+  /**
+   * fetch() rejects with a bare TypeError ("Failed to fetch") for a dropped
+   * connection, DNS failure, a blocked host or a missing permission - all of
+   * which read to the user as gibberish printed under a sentence. Give them a
+   * code the UI can turn into a sentence.
+   */
+  function classify(e) {
+    if (e && e.code) return e;
+    var msg = String((e && e.message) || e);
+    var offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    if (e instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(msg)) {
+      return Object.assign(new Error(msg), { code: offline ? 'offline' : 'network' });
+    }
+    return Object.assign(new Error(msg), { code: 'error' });
+  }
+
   function serial(items, fn) {
     var out = [];
     return items.reduce(function (p, item) {
       return p.then(function () {
         return Promise.resolve(fn(item))
-          .catch(function (e) { return { ok: false, code: e.code || 'error', error: String(e.message || e) }; })
+          .catch(function (e) {
+            var c = classify(e);
+            return { ok: false, code: c.code, error: String(c.message) };
+          })
           .then(function (r) { out.push(r); });
       });
     }, Promise.resolve()).then(function () { return out; });
@@ -572,7 +676,10 @@
       if (next >= items.length) return Promise.resolve();
       var i = next++;
       return Promise.resolve(fn(items[i]))
-        .catch(function (e) { return { ok: false, code: e.code || 'error', error: String(e.message || e) }; })
+        .catch(function (e) {
+          var c = classify(e);
+          return { ok: false, code: c.code, error: String(c.message) };
+        })
         .then(function (r) { out[i] = r; return worker(); });
     }
     var workers = [];
@@ -646,8 +753,9 @@
       return serialGroups(groups, function (group) {
         return Promise.resolve(impl(group, src, tgt, cfg, opts.onProgress))
           .catch(function (e) {
+            var c = classify(e);
             return group.map(function () {
-              return { ok: false, code: e.code || 'error', error: String(e.message || e) };
+              return { ok: false, code: c.code, error: String(c.message) };
             });
           });
       }).then(function (chunks) {

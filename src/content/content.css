@@ -206,3 +206,21 @@ html.fr-tint-dark img:not([src*=".svg"]) { filter: brightness(.88) contrast(1.02
   fr-s { background: none !important; box-shadow: none !important; opacity: 1 !important; }
   #fr-ruler-top, #fr-ruler-bottom, fr-ui { display: none !important; }
 }
+
+/* A translation that could not be hoisted out of a link. Clicks on it are
+   cancelled in JS; this only stops it *looking* like part of the link. Text
+   decoration propagates from the ancestor link box and cannot be cancelled on
+   a descendant, so overline/underline is suppressed by painting our own
+   surface over it rather than by text-decoration:none. */
+fr-t.fr-t-in-link {
+  cursor: auto !important;
+  -webkit-text-decoration-line: none;
+  text-decoration-line: none;
+  isolation: isolate;
+}
+
+/* Clearance that travels with the target. The <fr-spacer> and
+   scroll-padding-bottom only help the document scroller; a page that scrolls
+   an inner div would still park the current sentence under the toolbar.
+   scroll-margin applies to whichever ancestor actually scrolls. */
+html.fr-active fr-s { scroll-margin-bottom: 104px; scroll-margin-top: 16px; }

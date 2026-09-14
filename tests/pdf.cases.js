@@ -28,6 +28,26 @@
       return { str: str, x: x, y: y, w: w === undefined ? str.length * 5 : w, h: 10 };
     }
 
+    /* ---- toBoxes shape and rotated-run detection ---- */
+    (function () {
+      var upright = { items: [
+        { str: 'Hello', transform: [10, 0, 0, 10, 50, 700], width: 40, height: 10 },
+        { str: 'world', transform: [10, 0, 0, 10, 95, 700], width: 40, height: 10 }
+      ] };
+      var r1 = P.toBoxes(upright);
+      eq('upright runs are not flagged as rotated', r1.rotatedRuns, 0);
+      eq('upright coordinates come straight from the matrix',
+         [r1.boxes[0].x, r1.boxes[0].y], [50, 700]);
+
+      // A 90-degree-clockwise text matrix: the advance is vertical.
+      var sideways = { items: [
+        { str: 'Hello', transform: [0, -10, 10, 0, 700, 400], width: 40, height: 10 }
+      ] };
+      var r2 = P.toBoxes(sideways);
+      eq('a vertical advance is detected as rotated', r2.rotatedRuns, 1);
+      eq('rotated runs get the along-line axis as x', r2.boxes[0].x, -400);
+    })();
+
     /* ---- single column ---- */
     (function () {
       var boxes = [
@@ -87,6 +107,26 @@
       }
       eq('a word-level single-column page is not split into two',
          P.detectColumns(boxes, 600), null);
+    })();
+
+    /* ---- a two-column page with a full-width title is still two columns ---- */
+    (function () {
+      var boxes = [];
+      for (var i = 0; i < 24; i++) {
+        var y = 700 - i * 14;
+        boxes.push(line('left line ' + i + ' of the first column here', 50, y, 220));
+        boxes.push(line('right line ' + i + ' of the second column', 320, y, 220));
+      }
+      // One run spanning both columns: a title, a wide caption, a licence line.
+      boxes.push(line('A Full Width Title Across Both Columns', 50, 760, 500));
+      eq('one full-width run does not kill gutter detection',
+         P.detectColumns(boxes, 600) !== null, true);
+
+      var withCaption = boxes.slice();
+      withCaption.push(line('Figure 1. A caption spanning the full page width', 50, 400, 500));
+      withCaption.push(line('Open access under CC BY 4.0 - see the publisher', 50, 30, 500));
+      eq('three full-width runs still do not kill it',
+         P.detectColumns(withCaption, 600) !== null, true);
     })();
 
     /* ---- a full-width element defeats column detection, safely ---- */
@@ -159,9 +199,24 @@
       eq('a caption that moves around the page is not furniture',
          !!heads[P.normaliseForRepeat('Table 1')], false);
 
+      // Even pinned to the same spot, "Table N" is a heading, not furniture:
+      // one word plus a number is exactly what a numbered heading looks like.
       var fixed = P.findRunningHeads([page(1, 780), page(2, 779), page(3, 781), page(4, 780)]);
-      eq('the same text pinned to the same place IS furniture',
-         !!fixed[P.normaliseForRepeat('Table 1')], true);
+      eq('a numbered heading is never furniture, even at a fixed position',
+         !!fixed[P.normaliseForRepeat('Table 1')], false);
+    })();
+
+    /* ---- numbered headings must survive; real running heads must not ---- */
+    (function () {
+      eq('"Problem 1" is a heading, not a running head', P.isFurniture('Problem 1'), false);
+      eq('"Chapter 3" is a heading', P.isFurniture('Chapter 3'), false);
+      eq('"Question 12" is a heading', P.isFurniture('Question 12'), false);
+      eq('a journal running head is furniture',
+         P.isFurniture('Journal of Test Results | VOL 12 | 101'), true);
+      eq('a publication line is furniture',
+         P.isFurniture('Nature Neuroscience, Vol 24, 1189'), true);
+      eq('a two-word masthead is furniture', P.isFurniture('Nature Neuroscience'), true);
+      eq('a bare page number is furniture', P.isFurniture('  101  '), true);
     })();
 
     /* ---- paragraphs cut by a column or page break ---- */

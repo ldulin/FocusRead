@@ -55,6 +55,9 @@
     'button[disabled]{opacity:.35;cursor:default}',
     'button[disabled]:hover{background:none}',
     'button.on{background:#1f6feb;color:#fff}',
+    'button[data-mode="ruler"].on{background:#7a4ddb}',
+    'button[data-mode="ruler"].on::after{content:"";position:absolute;left:6px;right:6px;bottom:4px;height:2px;background:#fff;border-radius:2px}',
+    'button[data-act="focus"]{position:relative}',
     'button.on:hover{background:#1a5fd0}',
     'button.primary{background:#1b1d21;color:#fff;min-width:38px}',
     'button.primary:hover{background:#33373e}',
@@ -232,8 +235,22 @@
       list.forEach(function (el2) { el2.tabIndex = el2 === target ? 0 : -1; });
       target.focus();
     }
-    var all = items();
-    all.forEach(function (el2, i) { el2.tabIndex = i === 0 ? 0 : -1; });
+    // Seat the tab stop on a control that is never disabled. Doing this at
+    // mount time picked "prev", which activate() disables immediately at
+    // sentence 0 - leaving the whole toolbar unreachable by Tab, which is
+    // strictly worse than the native tab stops it replaced.
+    this._reseatTabStop = function () {
+      var list = items();
+      if (!list.length) return;
+      var held = list.filter(function (el2) { return el2.tabIndex === 0; })[0];
+      if (held && !held.disabled) return;
+      var preferred = bar.querySelector('[data-act="toggle"]');
+      var target = (preferred && !preferred.disabled) ? preferred : list[0];
+      list.forEach(function (el2) { el2.tabIndex = el2 === target ? 0 : -1; });
+    };
+    Array.prototype.forEach.call(bar.querySelectorAll('button, select'),
+      function (el2) { el2.tabIndex = -1; });
+    this._reseatTabStop();
 
     bar.addEventListener('keydown', function (e) {
       var list = items();
@@ -276,14 +293,16 @@
       }
     });
 
-    // Restore a previously dragged position.
+    // Restore a previously dragged position. The clamp has to wait until the
+    // host is in the document: measuring offsetWidth on a detached element
+    // returns 0, so every restored position clamped to the top-left corner.
     var saved = this.opts.position;
     if (saved && isFinite(saved.left) && isFinite(saved.top)) {
       bar.style.transform = 'none';
       bar.style.bottom = 'auto';
       bar.style.left = saved.left + 'px';
       bar.style.top = saved.top + 'px';
-      this._clampBar();
+      requestAnimationFrame(function () { self._clampBar(); });
     }
 
     // A dragged bar is positioned in viewport coordinates, so shrinking the
@@ -297,6 +316,7 @@
     var bar = this.$('.bar');
     if (!bar || bar.style.top === '' || bar.style.top === 'auto') return;
     var w = bar.offsetWidth, h = bar.offsetHeight;
+    if (!w || !h) return;                 // not laid out yet; nothing to clamp against
     var left = parseFloat(bar.style.left);
     var top = parseFloat(bar.style.top);
     if (!isFinite(left) || !isFinite(top)) return;
@@ -324,16 +344,24 @@
       q('[data-role="count"]').textContent = (total ? (idx + 1) : 0) + ' / ' + (total || 0);
       q('[data-act="prev"]').toggleAttribute('disabled', !(idx > 0));
       q('[data-act="next"]').toggleAttribute('disabled', !(total && idx < total - 1));
+      if (this._reseatTabStop) this._reseatTabStop();
     }
     if (s.rate !== undefined) q('[data-act="rate"]').textContent = Number(s.rate).toFixed(2).replace(/0$/, '') + 'x';
     // State must not be conveyed by colour alone: mirror it into aria-pressed
     // so a screen reader announces on/off, and into the title so a tooltip
     // says which it is.
     if (s.focus !== undefined) {
+      // `focus` is the MODE string ('off' | 'spotlight' | 'ruler'), not a
+      // boolean: spotlight and ruler previously rendered and announced
+      // identically, so pressing F twice gave no way to tell them apart.
+      var mode = (s.focus === true) ? 'spotlight' : (s.focus || 'off');
+      var LABELS = { off: 'off', spotlight: 'dim the rest', ruler: 'reading ruler' };
       var fb = q('[data-act="focus"]');
-      fb.classList.toggle('on', !!s.focus);
-      fb.setAttribute('aria-pressed', s.focus ? 'true' : 'false');
-      fb.title = 'Focus mode (F) - ' + (s.focus ? 'on' : 'off');
+      fb.classList.toggle('on', mode !== 'off');
+      fb.setAttribute('data-mode', mode);
+      fb.setAttribute('aria-pressed', mode !== 'off' ? 'true' : 'false');
+      fb.setAttribute('aria-label', 'Focus mode: ' + LABELS[mode]);
+      fb.title = 'Focus mode (F) - ' + LABELS[mode];
     }
     if (s.bilingual !== undefined) {
       var bb = q('[data-act="bilingual"]');
@@ -422,8 +450,13 @@
   UI.prototype.toast = function (message, ms) {
     var t = this.$('.toast');
     if (!t) return;
-    t.textContent = message;
+    // Reveal first, THEN write. A mutation inside a display:none subtree is
+    // outside the accessibility tree, and most screen readers stay silent.
     t.hidden = false;
+    t.textContent = '';
+    // Force the reveal to be observed before the text lands.
+    void t.offsetHeight;
+    t.textContent = message;
     clearTimeout(this._toastTimer);
     var self = this;
     this._toastTimer = setTimeout(function () {

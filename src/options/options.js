@@ -223,12 +223,20 @@
     });
   }
 
-  /** "https://api.example.com/v1" -> "https://api.example.com/*" */
+  /**
+   * "http://localhost:11434/v1" -> "http://localhost/*"
+   *
+   * Uses hostname, NOT host: a Chrome match pattern may not contain a port,
+   * and one that does is rejected outright - which meant a self-hosted
+   * LibreTranslate or Ollama on any non-default port could not even be saved.
+   * That is the documented example for the field.
+   */
   function originPattern(url) {
     try {
       var u = new URL(String(url));
       if (!/^https?:$/.test(u.protocol)) return null;
-      return u.protocol + '//' + u.host + '/*';
+      if (!u.hostname) return null;
+      return u.protocol + '//' + u.hostname + '/*';
     } catch (e) {
       return null;
     }
@@ -438,12 +446,14 @@
           return;
         }
         requestPermission({ origins: [pattern] }).then(function (granted) {
-          if (!granted) {
-            note(f.key, 'FocusRead needs permission to contact ' + pattern + '. It was declined, so this was not saved.');
-            return;
-          }
-          note(f.key, '');
+          // Save either way. Refusing to store the address as well as the
+          // permission just loses the reader's typing; the provider will
+          // report a clear failure if the permission really is missing.
           save(f.key, val);
+          note(f.key, granted
+            ? ''
+            : 'Saved, but FocusRead was not given permission to contact ' + pattern +
+              '. Translation through it will fail until you allow it.');
         });
         return;
       }

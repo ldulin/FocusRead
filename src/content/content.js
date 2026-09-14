@@ -18,6 +18,21 @@
 
   var controller = null;
 
+  /**
+   * Chrome renders a PDF in its own plugin viewer, which no content script can
+   * read. The URL is not a reliable signal - arxiv.org/pdf/2401.12345v1 has no
+   * .pdf suffix at all - but document.contentType is.
+   */
+  function isNativePdfViewer() {
+    try {
+      if (document.contentType === 'application/pdf') return true;
+      var embed = document.body && document.body.firstElementChild;
+      return !!(embed && embed.tagName === 'EMBED' && embed.type === 'application/pdf');
+    } catch (e) {
+      return false;
+    }
+  }
+
   function get() {
     if (!controller) controller = new FR.Controller({ root: document.body });
     return controller;
@@ -25,6 +40,7 @@
 
   function status() {
     return {
+      nativePdf: isNativePdfViewer(),
       active: !!(controller && controller.active),
       sentences: controller && controller.engine ? controller.engine.count() : 0,
       index: controller && controller.engine ? controller.engine.index : -1,
@@ -37,6 +53,10 @@
 
     switch (msg.type) {
       case 'FR_TOGGLE':
+        if (isNativePdfViewer()) {
+          respond({ error: 'native-pdf', nativePdf: true });
+          return false;
+        }
         if (controller && controller.active) {
           controller.deactivate();
           respond(status());

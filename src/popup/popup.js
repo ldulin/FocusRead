@@ -24,6 +24,7 @@
 
   function checkTab() {
     return send({ type: 'FR_STATUS_ACTIVE_TAB' }).then(function (r) {
+      window.__tabInfo = r;
       if (!r || r.error) return;
       // Without the "tabs" permission the URL is only visible once activeTab
       // has been granted. Unknown is not the same as unsupported.
@@ -31,9 +32,10 @@
 
       // A PDF URL passes the http(s) test, so it looks injectable - but Chrome
       // is rendering it in its own viewer, which no content script can reach.
-      // Checking this only inside the !injectable branch meant the one hint
-      // that explains the commonest confusion could never be shown.
-      if (/\.pdf(\?|#|$)/i.test(r.url || '')) {
+      // The suffix is not a reliable signal either (arxiv.org/pdf/2401.12345v1
+      // has none), so the content script reports its own document.contentType
+      // and that answer wins.
+      if (r.nativePdf || /\.pdf(\?|#|$)/i.test(r.url || '')) {
         $('start').disabled = true;
         $('pageNote').hidden = false;
         $('pageNote').textContent =
@@ -154,9 +156,12 @@
           btn.disabled = false;
           btn.textContent = 'Start reading this page';
           $('pageNote').hidden = false;
-          $('pageNote').textContent = r.error === 'unsupported-page'
-            ? 'FocusRead cannot run on this page.'
-            : 'Could not start: ' + r.error;
+          $('pageNote').textContent =
+            r.error === 'native-pdf'
+              ? 'Chrome shows PDFs in its own viewer, which extensions cannot read. Use "Open a PDF or Word file" below.'
+              : r.error === 'unsupported-page'
+                ? 'FocusRead cannot run on this page.'
+                : 'Could not start: ' + r.error;
           return;
         }
         window.close();

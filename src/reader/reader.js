@@ -29,12 +29,34 @@
    * ------------------------------------------------------------------ */
 
   /**
-   * @returns {{url:string, trusted:boolean}|null}
+   * Hosts that must never be fetched with the user's cookies on someone else's
+   * say-so: loopback, link-local, and the RFC1918 ranges. These are exactly the
+   * targets a web page cannot reach itself and would want a confused deputy for.
+   */
+  var PRIVATE_HOST = new RegExp(
+    '^(localhost|127\\.|0\\.0\\.0\\.0$|\\[?::1\\]?$|10\\.|192\\.168\\.|' +
+    '169\\.254\\.|172\\.(1[6-9]|2\\d|3[01])\\.|.*\\.local$|.*\\.internal$)', 'i');
+
+  /**
+   * @returns {Promise<{url:string, trusted:boolean}|null>}
    *
-   * `trusted` means the browser itself sent us here: the declarativeNetRequest
-   * rule rewrote a top-level navigation the user made. Anything else - notably
-   * a ?file= parameter - could have been supplied by any web page, because
-   * reader.html is web-accessible. Those are NOT fetched automatically.
+   * reader.html is web-accessible under a stable chrome-extension:// path, so
+   * the "?DNR:" prefix proves nothing on its own - any page can navigate to it
+   * or window.open() it and claim the same provenance. Trust therefore requires
+   * everything a genuine declarativeNetRequest redirect implies and an attacker
+   * cannot arrange:
+   *
+   *   - we are the top frame (not a hidden iframe),
+   *   - nothing scripted opened us (window.opener is null after a real
+   *     top-level navigation, and set after window.open),
+   *   - the URL is http(s) - the rule can never produce anything else, which
+   *     also kills "?DNR:file:///...",
+   *   - the intercept feature is actually switched on; if the user never
+   *     enabled it, no redirect of ours can have happened,
+   *   - the host is not loopback or private.
+   *
+   * Anything short of all five is treated as untrusted: shown to the user for
+   * confirmation and fetched without credentials.
    */
   function sourceFromLocation() {
     var search = location.search || '';
@@ -42,18 +64,35 @@
     if (search.indexOf('?DNR:') === 0) {
       // Deliberately NOT decoded. regexSubstitution copies the matched URL in
       // verbatim without percent-encoding it, so decoding here would corrupt
-      // any URL that legitimately contains a %-sequence (and throw outright on
-      // a stray % in a filename).
-      return { url: search.slice(5) + (location.hash || ''), trusted: true };
+      // any URL that legitimately contains a %-sequence.
+      var url = search.slice(5) + (location.hash || '');
+      var framed = false;
+      try { framed = root.top !== root.self; } catch (e) { framed = true; }
+      var opened = !!root.opener;
+
+      var host = '';
+      var scheme = '';
+      try {
+        var u = new URL(url);
+        host = u.hostname;
+        scheme = u.protocol;
+      } catch (e) { /* unparseable */ }
+
+      var shapeOk = /^https?:$/.test(scheme) && host && !PRIVATE_HOST.test(host);
+      if (framed || opened || !shapeOk) return Promise.resolve({ url: url, trusted: false });
+
+      return FR.settings.get().then(function (s) {
+        return { url: url, trusted: !!s.pdfInterceptLinks };
+      });
     }
 
     var m = /[?&]file=([^&#]+)/.exec(search);
     if (m) {
       var raw;
       try { raw = decodeURIComponent(m[1]); } catch (e) { raw = m[1]; }
-      return { url: raw, trusted: false };
+      return Promise.resolve({ url: raw, trusted: false });
     }
-    return null;
+    return Promise.resolve(null);
   }
 
   /**
@@ -79,8 +118,11 @@
     go.className = 'primary';
     go.textContent = 'Open it';
     go.addEventListener('click', function () {
+      go.disabled = true;                 // a second click would start a second load
       box.hidden = true;
-      loadPdf({ url: url }, false);
+      // Route through loadFromUrl so this path gets the same file:// guard,
+      // filename, status and error handling as every other entry point.
+      loadFromUrl(url, false);
     });
     var no = document.createElement('p');
     no.style.cssText = 'margin:10px 0 0;font-size:12px';
@@ -162,20 +204,45 @@
    * Loading
    * ------------------------------------------------------------------ */
 
-  function loadFromFile(file) {
+  /*
+   * Load generations.
+   *
+   * Opening a second document while the first is still extracting used to be
+   * mutually destructive: the new load's resetDocument() destroyed the old
+   * pdf.js document, the old one's chain then rejected with "Worker was
+   * destroyed", its catch called showError -> resetDocument, and THAT destroyed
+   * the new document. The user ended up with an error and no document, from two
+   * perfectly good files.
+   *
+   * Every entry point takes a generation; every continuation checks it before
+   * touching shared state or reporting anything.
+   */
+  var loadSeq = 0;
+
+  function beginLoad() {
     resetDocument();
+    return ++loadSeq;
+  }
+
+  function stale(gen) { return gen !== loadSeq; }
+
+  function loadFromFile(file) {
+    var gen = beginLoad();
     setFileName(file.name);
     $('dropError').hidden = true;
     showStatus('Reading ' + file.name + '...', 0.1);
     return file.arrayBuffer().then(function (buf) {
+      if (stale(gen)) return;
       var isPdf = /\.pdf$/i.test(file.name) || (FR.docx.sniff(buf) === 'pdf');
-      return isPdf ? loadPdf({ data: buf }) : loadDocx(buf);
+      return isPdf ? loadPdf({ data: buf }, false, gen) : loadDocx(buf, gen);
     }).catch(function (e) {
-      showError(e.message || String(e), e.code === 'no-vendor' ? null : undefined);
+      if (stale(gen)) return;          // a superseded load must not report
+      showError(e.message || String(e));
     });
   }
 
-  function loadFromUrl(url, trusted) {
+  function loadFromUrl(url, trusted, existingGen) {
+    var gen = existingGen === undefined ? beginLoad() : existingGen;
     var base = String(url).split(/[?#]/)[0].split('/').pop() || 'document.pdf';
     var name;
     try { name = decodeURIComponent(base); } catch (e) { name = base; }
@@ -185,18 +252,20 @@
     if (/^file:/i.test(url)) {
       // Extensions cannot read file:// until the user turns it on explicitly.
       return chromeAllowsFiles().then(function (allowed) {
+        if (stale(gen)) return;
         if (!allowed) {
           showError('To open local files by URL, enable "Allow access to file URLs" for FocusRead on the ' +
                     'chrome://extensions page. Or just drop the file onto this window, which needs no permission.');
           return;
         }
-        return loadPdf({ url: url }, trusted);
+        return loadPdf({ url: url }, trusted, gen);
       }).catch(function (e) {
-        // Previously uncaught: any failure here left the spinner up forever.
+        if (stale(gen)) return;
         showError('Could not open that file: ' + (e.message || e));
       });
     }
-    return loadPdf({ url: url }, trusted).catch(function (e) {
+    return loadPdf({ url: url }, trusted, gen).catch(function (e) {
+      if (stale(gen)) return;
       showError('Could not open that PDF: ' + (e.message || e));
     });
   }
@@ -211,38 +280,53 @@
     });
   }
 
-  function loadPdf(source, trusted) {
+  function loadPdf(source, trusted, gen) {
     state.kind = 'pdf';
     if (source.url) source.withCredentials = !!trusted;
+
     return FR.pdf.open(source, function (f) {
+      if (stale(gen)) return;          // do not repaint over a newer load
       showStatus('Downloading...', f * 0.4);
     }).then(function (res) {
-      state.doc = res.doc;
+      // Hold the document locally. Reading state.doc in a later .then lets a
+      // reset that lands mid-chain hand this load a null.
+      var doc = res.doc;
+      if (stale(gen)) {
+        // Otherwise a superseded load leaks a live worker for the tab's life.
+        try { doc.destroy(); } catch (e) { /* noop */ }
+        return null;
+      }
+      state.doc = doc;
       state.mod = res.mod;
       $('modes').hidden = false;
       $('pager').hidden = false;
-      $('pageCount').textContent = '/ ' + res.doc.numPages;
-      $('pageNum').max = String(res.doc.numPages);
-      return FR.settings.get();
-    }).then(function (s) {
-      showStatus('Extracting text...', 0.5);
-      return FR.pdf.extractReflow(state.doc, {
-        stripRunningHeads: s.stripRunningHeads,
-        joinHyphens: s.joinHyphens
-      }, function (f) {
-        showStatus('Extracting text... page ' + Math.round(f * state.doc.numPages), 0.5 + f * 0.45);
+      $('pageCount').textContent = '/ ' + doc.numPages;
+      $('pageNum').max = String(doc.numPages);
+
+      return FR.settings.get().then(function (s) {
+        if (stale(gen)) return null;
+        showStatus('Extracting text...', 0.5);
+        return FR.pdf.extractReflow(doc, {
+          stripRunningHeads: s.stripRunningHeads,
+          joinHyphens: s.joinHyphens
+        }, function (f) {
+          if (stale(gen)) return;
+          showStatus('Extracting text... page ' + Math.round(f * doc.numPages), 0.5 + f * 0.45);
+        });
       });
     }).then(function (out) {
+      if (!out || stale(gen)) return;
       state.blocks = out.blocks;
       showNotices(out.notices);
-      return setMode(state.mode);
+      return setMode(state.mode, gen);
     });
   }
 
-  function loadDocx(buffer) {
+  function loadDocx(buffer, gen) {
     state.kind = 'docx';
     showStatus('Converting Word document...', 0.4);
     return FR.docx.open(buffer).then(function (out) {
+      if (stale(gen)) return;
       $('modes').hidden = true;
       $('pager').hidden = true;
       var docEl = $('doc');
@@ -286,7 +370,9 @@
     return attachController(docEl, true);
   }
 
-  function renderOriginal() {
+  function renderOriginal(gen) {
+    var doc = state.doc;
+    if (!doc) return Promise.resolve();
     var host = $('pages');
     host.innerHTML = '';
     state.rendered = new Set();
@@ -296,12 +382,14 @@
 
     var width = Math.min(900, (root.innerWidth || 900) - 60);
 
-    return state.doc.getPage(1).then(function (p1) {
+    return doc.getPage(1).then(function (p1) {
+      // A reset landing inside this await would null state.doc; use the local.
+      if (doc !== state.doc || (gen !== undefined && stale(gen))) return;
       var base = p1.getViewport({ scale: 1 });
       var scale = width / base.width;
 
       // Placeholders keep the scrollbar honest; pages render as they approach.
-      for (var n = 1; n <= state.doc.numPages; n++) {
+      for (var n = 1; n <= doc.numPages; n++) {
         var ph = document.createElement('div');
         ph.className = 'pageWrap fr-ignore';
         ph.setAttribute('data-placeholder', String(n));
@@ -319,7 +407,7 @@
           state.rendered.add(n);
           state.io.unobserve(e.target);
           var slot = e.target;
-          FR.pdf.renderPage(state.doc, state.mod, n, host, scale, slot).catch(function (err) {
+          FR.pdf.renderPage(doc, state.mod, n, host, scale, slot).catch(function (err) {
             state.rendered.delete(n);          // allow a retry on the next pass
             slot.textContent = 'Could not render page ' + n + ': ' + (err.message || err);
             slot.style.cssText += ';display:grid;place-items:center;color:#b3261e;font-size:13px;padding:16px';
@@ -333,13 +421,14 @@
     });
   }
 
-  function setMode(mode) {
+  function setMode(mode, gen) {
+    if (gen !== undefined && stale(gen)) return Promise.resolve();
     state.mode = mode;
     Array.prototype.forEach.call(document.querySelectorAll('#modes button'), function (b) {
       b.classList.toggle('on', b.getAttribute('data-mode') === mode);
     });
     if (state.controller) { state.controller.deactivate(); state.controller = null; }
-    return mode === 'original' ? renderOriginal() : renderReflow();
+    return mode === 'original' ? renderOriginal(gen) : renderReflow();
   }
 
   /* ------------------------------------------------------------------ *
@@ -375,7 +464,7 @@
                  host.querySelector('[data-placeholder="' + n + '"]');
     if (target) {
       target.scrollIntoView({
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+        behavior: prefersReducedMotion() ? 'instant' : 'smooth',
         block: 'start'
       });
     }
@@ -474,10 +563,11 @@
     wire();
     FR.settings.get().then(function (s) {
       state.mode = s.pdfView === 'original' ? 'original' : 'reflow';
-      var src = sourceFromLocation();
-      if (!src) return;
-      if (src.trusted) loadFromUrl(src.url, true);
-      else confirmUrl(src.url);
+      return sourceFromLocation().then(function (src) {
+        if (!src) return;
+        if (src.trusted) loadFromUrl(src.url, true);
+        else confirmUrl(src.url);
+      });
     });
   });
 })(typeof globalThis !== 'undefined' ? globalThis : self);

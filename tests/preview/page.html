@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Test article - FocusRead</title>
-<link rel="stylesheet" href="../../src/content/content.css?v=1789352295">
+<link rel="stylesheet" href="../../src/content/content.css?v=1789355196">
 <style>
   body { max-width: 42rem; margin: 40px auto; padding: 0 22px 40vh;
          font: 17px/1.7 Georgia, serif; color: #23262b; background: #fbfbfc; }
@@ -65,14 +65,27 @@ reader, as should the code block below.</p>
 
 <p id="btncase">A paragraph with <button type="button" id="pagebtn">a page button</button> inside it.</p>
 
+<!-- Shapes that exposed regressions in the fixes themselves. -->
+<p id="multispan"><span class="c1">First inner sentence. Second inner sentence. Third inner sentence.</span></p>
+
+<p id="hidden">The effect was <span style="display:none">absolutely</span> significant in all three cohorts.</p>
+
+<p id="blocklink"><a href="#doi" style="display:block">A whole DOI line that is its own block element.</a></p>
+
+<div id="tabwrap" tabindex="0"><p>Inside a wrapper that carries tabindex zero.</p></div>
+
+<details id="det" open><summary>A summary element</summary><p>Details body text here.</p></details>
+
+<p id="rolelink"><span role="link" tabindex="0" id="rl">A span acting as a link.</span> Trailing sentence.</p>
+
 <script src="stub.js?v=1789352992"></script>
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
 <script src="../../src/lib/settings.js?v=1789352272"></script>
-<script src="../../src/lib/translate.js?v=1789352664"></script>
-<script src="../../src/content/speech.js?v=1789351876"></script>
-<script src="../../src/content/engine.js?v=1789352227"></script>
-<script src="../../src/content/ui.js?v=1789352272"></script>
-<script src="../../src/content/controller.js?v=1789352664"></script>
+<script src="../../src/lib/translate.js?v=1789355263"></script>
+<script src="../../src/content/speech.js?v=1789355010"></script>
+<script src="../../src/content/engine.js?v=1789355196"></script>
+<script src="../../src/content/ui.js?v=1789355104"></script>
+<script src="../../src/content/controller.js?v=1789355658"></script>
 <script>
   // Stand in for the content-script entry point so the page can be driven
   // from the console during development.

@@ -167,7 +167,8 @@ through `osascript -l JavaScript`:
 | Check | Covers |
 | --- | --- |
 | `tests/segmenter.cases.js` | sentence splitting against academic punctuation |
-| `tests/pdf.cases.js` | column detection, line and paragraph rebuilding, running-head removal - with synthetic page data, so no PDF or pdf.js needed |
+| `tests/sw.cases.js` | which sites auto-activation registers on, which pages are injectable, the PDF redirect rule |
+| `tests/pdf.cases.js` | column detection, line and paragraph rebuilding, running-head removal, rotated text - with synthetic page data, so no PDF or pdf.js needed |
 | `tests/syntax.sh` | every JS file parses |
 | `tests/wiring.py` | nothing references anything that doesn't exist: manifest paths, injection order, element ids, message types, settings keys, CSS classes |
 
