@@ -261,16 +261,23 @@ button.primary:hover { filter: brightness(1.08); }
 /* ---------- notices (mammoth warnings, extraction caveats) ---------- */
 .notices {
   max-width: 46rem;
-  margin: 0 auto 26px;
-  padding: 13px 16px;
+  margin: 0 auto 14px;
+  padding: 7px 14px;
   border-radius: 10px;
   background: color-mix(in srgb, #f5c518 17%, var(--card));
   border: 1px solid color-mix(in srgb, #f5c518 45%, transparent);
   font-size: 13px;
   line-height: 1.6;
 }
-.notices h4 { margin: 0 0 5px; font-size: 13px; }
-.notices ul { margin: 0; padding-left: 19px; }
+/* Folded, this is one line; the padding only grows once it is opened. */
+.notices summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink);
+}
+.notices summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.notices details[open] { padding-bottom: 4px; }
+.notices ul { margin: 6px 0 0; padding-left: 19px; }
 .notices li { margin: 2px 0; }
 
 /* ---------- drag veil ---------- */

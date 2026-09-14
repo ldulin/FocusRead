@@ -6,7 +6,7 @@
 <title>FocusRead - read papers aloud, sentence by sentence</title>
 <meta name="description" content="Open a PDF or Word file and read it sentence by sentence: tap to hear it, dim the rest to stay focused, translate a word or the whole page. Works on your phone.">
 <meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="reader/reader.css?v=89f57ecd1a">
+<link rel="stylesheet" href="reader/reader.css?v=732b0e6a31">
 <link rel="stylesheet" href="content/content.css?v=3a7c868122">
 <link rel="icon" href="icons/icon32.png">
 <link rel="apple-touch-icon" href="icons/icon128.png">
@@ -14,7 +14,7 @@
 <meta name="theme-color" content="#1b1d21">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="FocusRead">
-<link rel="stylesheet" href="mobile.css?v=c26ae67117">
+<link rel="stylesheet" href="mobile.css?v=81dad9ebc1">
 </head>
 <body>
 
@@ -58,14 +58,22 @@
   </div>
   
 <section class="webnote">
-  <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
-  read it sentence by sentence - tap a sentence to hear it, tap again to stop.
-  Everything happens on your device; the file is never uploaded.</p>
-  <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
-  you need the Chrome extension, which browsers on phones cannot run -
-  <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
-  and install instructions</a>.</p>
-  <p><button type="button" id="trySample" class="ghost">Try it on a sample paper</button></p>
+  <div class="webnoteRow">
+    <button type="button" id="aboutBtn" class="ghost about"
+            aria-expanded="false" aria-controls="aboutBody">
+      <span class="badge" aria-hidden="true">i</span>What is this?
+    </button>
+    <button type="button" id="trySample" class="ghost">Try it on a sample paper</button>
+  </div>
+  <div id="aboutBody" class="webnoteBody" hidden>
+    <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
+    read it sentence by sentence - tap a sentence to hear it, tap again to stop.
+    Everything happens on your device; the file is never uploaded.</p>
+    <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
+    you need the Chrome extension, which browsers on phones cannot run -
+    <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
+    and install instructions</a>.</p>
+  </div>
 </section>
 
   <section id="drop" class="drop">
@@ -106,15 +114,28 @@
 <script src="content/controller.js?v=ad77c5cc70"></script>
 <script src="reader/docx.js?v=74d6971811"></script>
 <script src="reader/pdf.js?v=ee58d305e7"></script>
-<script src="reader/reader.js?v=2b18ee7e4a"></script>
+<script src="reader/reader.js?v=85bc654e45"></script>
 <script>
 (function () {
-  var note = document.querySelector('.webnote');
-  if (note) {
-    // The note is collapsed on a phone; let a tap open it.
-    note.addEventListener('click', function (e) {
-      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
-      note.classList.toggle('open');
+  // Once a document is open, even the closed row is just taking up reading
+  // space, and there is nothing left on the page to orient anyone about. The
+  // drop card's own visibility is the signal: it comes back when the document
+  // is closed, and so does this.
+  var noteSec = document.querySelector('.webnote');
+  var drop = document.getElementById('drop');
+  if (noteSec && drop && window.MutationObserver) {
+    new MutationObserver(function () { noteSec.hidden = drop.hidden; })
+      .observe(drop, { attributes: true, attributeFilter: ['hidden'] });
+  }
+
+  var aboutBtn = document.getElementById('aboutBtn');
+  var aboutBody = document.getElementById('aboutBody');
+  if (aboutBtn && aboutBody) {
+    aboutBtn.addEventListener('click', function () {
+      var open = aboutBody.hidden;
+      aboutBody.hidden = !open;
+      // Announce it as well as show it: the button IS the state.
+      aboutBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
   }
 

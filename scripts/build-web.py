@@ -94,16 +94,26 @@ HEAD_EXTRAS = """<link rel="icon" href="icons/icon32.png">
 <meta name="apple-mobile-web-app-title" content="FocusRead">
 """
 
+# Orientation, not instructions: it is read once and then in the way, so it
+# lives behind a button and the page opens on the two things you might do.
 WEB_NOTE = """
 <section class="webnote">
-  <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
-  read it sentence by sentence - tap a sentence to hear it, tap again to stop.
-  Everything happens on your device; the file is never uploaded.</p>
-  <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
-  you need the Chrome extension, which browsers on phones cannot run -
-  <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
-  and install instructions</a>.</p>
-  <p><button type="button" id="trySample" class="ghost">Try it on a sample paper</button></p>
+  <div class="webnoteRow">
+    <button type="button" id="aboutBtn" class="ghost about"
+            aria-expanded="false" aria-controls="aboutBody">
+      <span class="badge" aria-hidden="true">i</span>What is this?
+    </button>
+    <button type="button" id="trySample" class="ghost">Try it on a sample paper</button>
+  </div>
+  <div id="aboutBody" class="webnoteBody" hidden>
+    <p><strong>FocusRead on the web.</strong> Open a PDF or Word file below and
+    read it sentence by sentence - tap a sentence to hear it, tap again to stop.
+    Everything happens on your device; the file is never uploaded.</p>
+    <p>This is the reader only. To use FocusRead on <em>web pages</em> as well
+    you need the Chrome extension, which browsers on phones cannot run -
+    <a href="https://github.com/ldulin/FocusRead" target="_blank" rel="noopener">source
+    and install instructions</a>.</p>
+  </div>
 </section>
 """
 
@@ -152,12 +162,25 @@ def build_page(src_rel, out_name):
     if out_name == 'index.html':
         html = html.replace('</body>', '''<script>
 (function () {
-  var note = document.querySelector('.webnote');
-  if (note) {
-    // The note is collapsed on a phone; let a tap open it.
-    note.addEventListener('click', function (e) {
-      if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON') return;
-      note.classList.toggle('open');
+  // Once a document is open, even the closed row is just taking up reading
+  // space, and there is nothing left on the page to orient anyone about. The
+  // drop card's own visibility is the signal: it comes back when the document
+  // is closed, and so does this.
+  var noteSec = document.querySelector('.webnote');
+  var drop = document.getElementById('drop');
+  if (noteSec && drop && window.MutationObserver) {
+    new MutationObserver(function () { noteSec.hidden = drop.hidden; })
+      .observe(drop, { attributes: true, attributeFilter: ['hidden'] });
+  }
+
+  var aboutBtn = document.getElementById('aboutBtn');
+  var aboutBody = document.getElementById('aboutBody');
+  if (aboutBtn && aboutBody) {
+    aboutBtn.addEventListener('click', function () {
+      var open = aboutBody.hidden;
+      aboutBody.hidden = !open;
+      // Announce it as well as show it: the button IS the state.
+      aboutBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
   }
 

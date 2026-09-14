@@ -185,17 +185,34 @@
     document.body.classList.remove('split');
   }
 
+  /**
+   * What had to be guessed or dropped while rebuilding the document.
+   *
+   * Folded away by default: it is worth being able to check what was skipped,
+   * but it is read once, and left open it costs a block of the reading space
+   * on every page - in side-by-side it spans the whole grid row and takes the
+   * height off both panes.
+   */
   function showNotices(list) {
     var box = $('notices');
     if (!list || !list.length) { box.hidden = true; return; }
     box.hidden = false;
-    box.innerHTML = '<h4>About this document</h4><ul></ul>';
-    var ul = box.querySelector('ul');
+    box.textContent = '';
+
+    var fold = document.createElement('details');
+    var sum = document.createElement('summary');
+    sum.textContent = 'About this document (' + list.length +
+                      (list.length === 1 ? ' note)' : ' notes)');
+    fold.appendChild(sum);
+
+    var ul = document.createElement('ul');
     list.forEach(function (n) {
       var li = document.createElement('li');
       li.textContent = n;
       ul.appendChild(li);
     });
+    fold.appendChild(ul);
+    box.appendChild(fold);
   }
 
   function setFileName(name) {
