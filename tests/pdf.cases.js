@@ -48,6 +48,29 @@
       eq('rotated runs get the along-line axis as x', r2.boxes[0].x, -400);
     })();
 
+    /* ---- rotated runs: decoration vs a genuinely sideways page ---- */
+    (function () {
+      function upright(i) {
+        return { str: 'body line ' + i, transform: [10, 0, 0, 10, 56, 700 - i * 13], width: 200, height: 10 };
+      }
+      function sideways(i) {
+        return { str: 'axis ' + i, transform: [0, -8, 8, 0, 300 + i, 400], width: 40, height: 8 };
+      }
+      // A plot's axis labels among ordinary body text.
+      var mixed = { items: [] };
+      for (var i = 0; i < 20; i++) mixed.items.push(upright(i));
+      for (var j = 0; j < 3; j++) mixed.items.push(sideways(j));
+      var r = P.toBoxes(mixed);
+      eq('a few rotated runs are counted', r.rotatedRuns, 3);
+      eq('but the page is mostly upright', r.rotatedRuns > r.boxes.length * 0.5, false);
+
+      // A genuinely sideways page.
+      var turned = { items: [] };
+      for (var k = 0; k < 20; k++) turned.items.push(sideways(k));
+      var r2 = P.toBoxes(turned);
+      eq('a sideways page is mostly rotated', r2.rotatedRuns > r2.boxes.length * 0.5, true);
+    })();
+
     /* ---- single column ---- */
     (function () {
       var boxes = [
@@ -57,7 +80,7 @@
         line('vertical gap than the line spacing.', 50, 646, 320)
       ];
       var gutter = P.detectColumns(boxes, 600);
-      eq('a short page is not treated as two columns', gutter, null);
+      eq('a page with too few runs is not treated as two columns', gutter, null);
 
       var ls = P.toLines(boxes, gutter);
       eq('four visual lines are recovered', ls.length, 4);
@@ -68,6 +91,25 @@
       eq('a wider gap starts a new paragraph', blocks.length, 2);
       eq('paragraph one is joined from its two lines', blocks[0].text,
          'The first sentence of the paragraph runs across two lines and ends here.');
+    })();
+
+    /* ---- a SPARSE two-column page (one run per line, as many PDFs emit) ---- */
+    (function () {
+      // 14 lines a side is a real page; requiring 40 runs meant pages like this
+      // were read straight across, interleaving the columns.
+      var boxes = [];
+      for (var i = 0; i < 14; i++) {
+        var y = 700 - i * 14;
+        boxes.push(line('left hand column line number ' + i, 56, y, 220));
+        boxes.push(line('right hand column line ' + i, 320, y, 220));
+      }
+      var g = P.detectColumns(boxes, 612);
+      eq('a sparse two-column page is still detected', g !== null, true);
+      eq('its gutter falls between the columns', g > 275 && g < 325, true);
+
+      var ls = P.toLines(boxes, g);
+      eq('the left column is read before the right',
+         ls.slice(0, 14).every(function (l) { return l.text.indexOf('left') === 0; }), true);
     })();
 
     /* ---- two columns ---- */
@@ -242,6 +284,24 @@
         { type: 'p', text: 'lowercase start but previous was finished', brokeColumn: true }
       ]);
       eq('a finished sentence is not merged with what follows', finished.length, 2);
+    })();
+
+    /* ---- a trailing abbreviation is not a paragraph end ---- */
+    (function () {
+      eq('a real sentence end is recognised', P.endsSentence('observed in these data.'), true);
+      eq('"and cf." is not a sentence end', P.endsSentence('the distribution, and cf.'), false);
+      eq('"et al." is not a sentence end', P.endsSentence('as shown by Smith et al.'), false);
+      eq('"Fig." is not a sentence end', P.endsSentence('as shown in Fig.'), false);
+      eq('a question mark ends a sentence', P.endsSentence('does it generalise?'), true);
+
+      // The line pair that exposed this on a real PDF: a short line ending in
+      // an abbreviation, followed by a capitalised word.
+      var lines = [
+        { text: 'See Fig. 3 for the full distribution, and cf.', y: 700, left: 56, right: 260, h: 10, col: 0 },
+        { text: 'Jones for a contrasting account of the data.', y: 687, left: 56, right: 280, h: 10, col: 0 }
+      ];
+      var blocks = P.linesToBlocks(lines, 10, true);
+      eq('the paragraph is not cut after an abbreviation', blocks.length, 1);
     })();
 
     /* ---- headings ---- */

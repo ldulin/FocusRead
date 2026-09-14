@@ -18,3 +18,7 @@ Thumbs.db
 tests/preview/popup.html
 tests/preview/options.html
 tests/preview/reader.html
+
+# Local test documents (the generated fixture IS committed)
+tests/fixtures/*.pdf
+!tests/fixtures/paper.pdf

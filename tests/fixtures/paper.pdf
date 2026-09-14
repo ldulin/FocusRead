@@ -1,0 +1,137 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2557 >>
+stream
+BT /F1 8.0 Tf 1 0 0 1 56.00 752.00 Tm (Journal of Test Results | VOL 12 | 101) Tj ET
+BT /F1 17.0 Tf 1 0 0 1 56.00 710.00 Tm (Sentence Segmentation Under Adversarial) Tj ET
+BT /F1 17.0 Tf 1 0 0 1 56.00 690.00 Tm (Punctuation In Scholarly Documents) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 650.00 Tm (Prior work \(Smith et al., 2020\) reported an) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 637.00 Tm (effect at p < 0.05 across three cohorts. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 624.00 Tm (replicated this in a pre-registered sample.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 611.00 Tm (See Fig. 3 for the full distribution, and cf.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 598.00 Tm (Jones for a contrasting account of the inter-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 585.00 Tm (national variation observed in these data.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 559.00 Tm (Participants \(N = 24, mean age 22.4 yrs\)) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 546.00 Tm (completed 3 runs of the task. Each run took) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 533.00 Tm (6.5 min. The dataset is open access. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 520.00 Tm (used a Butterworth filter, i.e. a maximally) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 507.00 Tm (flat response, before resampling to 1 kHz.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 494.00 Tm (The pipeline was implemented by J. R. Smith) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 481.00 Tm (and validated against the U.S. National) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 468.00 Tm (Institute of Standards reference set. Stimuli) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 455.00 Tm (included images, sounds, etc. Results were) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 442.00 Tm (consistent across modalities. Although the) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 429.00 Tm (effect was small in the first cohort, we) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 650.00 Tm (observed a consistent increase across all) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 637.00 Tm (three replication samples, which suggests) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 624.00 Tm (that the underlying mechanism is robust.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 598.00 Tm (Analyses were carried out in a standard) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 585.00 Tm (environment. No participant was excluded) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 572.00 Tm (after the pre-registration was filed.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 559.00 Tm (Confidence intervals are reported through-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 546.00 Tm (out, and all code is available on request.) Tj ET
+BT /F1 8.0 Tf 1 0 0 1 300.00 40.00 Tm (101) Tj ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2388 >>
+stream
+BT /F1 8.0 Tf 1 0 0 1 56.00 752.00 Tm (Journal of Test Results | VOL 12 | 102) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 720.00 Tm (Prior work \(Smith et al., 2020\) reported an) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 707.00 Tm (effect at p < 0.05 across three cohorts. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 694.00 Tm (replicated this in a pre-registered sample.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 681.00 Tm (See Fig. 3 for the full distribution, and cf.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 668.00 Tm (Jones for a contrasting account of the inter-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 655.00 Tm (national variation observed in these data.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 629.00 Tm (Participants \(N = 24, mean age 22.4 yrs\)) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 616.00 Tm (completed 3 runs of the task. Each run took) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 603.00 Tm (6.5 min. The dataset is open access. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 590.00 Tm (used a Butterworth filter, i.e. a maximally) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 577.00 Tm (flat response, before resampling to 1 kHz.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 564.00 Tm (The pipeline was implemented by J. R. Smith) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 551.00 Tm (and validated against the U.S. National) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 538.00 Tm (Institute of Standards reference set. Stimuli) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 525.00 Tm (included images, sounds, etc. Results were) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 512.00 Tm (consistent across modalities. Although the) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 499.00 Tm (effect was small in the first cohort, we) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 720.00 Tm (observed a consistent increase across all) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 707.00 Tm (three replication samples, which suggests) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 694.00 Tm (that the underlying mechanism is robust.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 668.00 Tm (Analyses were carried out in a standard) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 655.00 Tm (environment. No participant was excluded) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 642.00 Tm (after the pre-registration was filed.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 629.00 Tm (Confidence intervals are reported through-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 616.00 Tm (out, and all code is available on request.) Tj ET
+BT /F1 8.0 Tf 1 0 0 1 300.00 40.00 Tm (102) Tj ET
+
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 2388 >>
+stream
+BT /F1 8.0 Tf 1 0 0 1 56.00 752.00 Tm (Journal of Test Results | VOL 12 | 103) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 720.00 Tm (Prior work \(Smith et al., 2020\) reported an) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 707.00 Tm (effect at p < 0.05 across three cohorts. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 694.00 Tm (replicated this in a pre-registered sample.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 681.00 Tm (See Fig. 3 for the full distribution, and cf.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 668.00 Tm (Jones for a contrasting account of the inter-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 655.00 Tm (national variation observed in these data.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 629.00 Tm (Participants \(N = 24, mean age 22.4 yrs\)) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 616.00 Tm (completed 3 runs of the task. Each run took) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 603.00 Tm (6.5 min. The dataset is open access. We) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 590.00 Tm (used a Butterworth filter, i.e. a maximally) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 577.00 Tm (flat response, before resampling to 1 kHz.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 564.00 Tm (The pipeline was implemented by J. R. Smith) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 551.00 Tm (and validated against the U.S. National) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 538.00 Tm (Institute of Standards reference set. Stimuli) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 525.00 Tm (included images, sounds, etc. Results were) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 512.00 Tm (consistent across modalities. Although the) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 56.00 499.00 Tm (effect was small in the first cohort, we) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 720.00 Tm (observed a consistent increase across all) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 707.00 Tm (three replication samples, which suggests) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 694.00 Tm (that the underlying mechanism is robust.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 668.00 Tm (Analyses were carried out in a standard) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 655.00 Tm (environment. No participant was excluded) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 642.00 Tm (after the pre-registration was filed.) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 629.00 Tm (Confidence intervals are reported through-) Tj ET
+BT /F1 10.0 Tf 1 0 0 1 320.00 616.00 Tm (out, and all code is available on request.) Tj ET
+BT /F1 8.0 Tf 1 0 0 1 300.00 40.00 Tm (103) Tj ET
+
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000253 00000 n 
+0000002862 00000 n 
+0000002988 00000 n 
+0000005428 00000 n 
+0000005554 00000 n 
+0000007994 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+8064
+%%EOF

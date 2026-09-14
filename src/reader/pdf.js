@@ -138,7 +138,13 @@
    * many text runs straddle it.
    */
   function detectColumns(boxes, pageWidth) {
-    if (boxes.length < 40 || !pageWidth) return null;
+    // Enough runs to be meaningful, but not many. A PDF that emits one run per
+    // LINE rather than per word gives a full two-column page only ~30 runs, and
+    // a 40-run floor silently skipped column detection on every one of them -
+    // so the two columns were read interleaved, half a sentence at a time.
+    // False positives are held off by the gutter width and the 25%-each-side
+    // test below, not by this count.
+    if (boxes.length < 12 || !pageWidth) return null;
 
     // Counting how many runs STRADDLE the midline only works when a run is a
     // whole line. Plenty of PDFs emit one run per word, and a word almost
@@ -399,7 +405,7 @@
           else if (ln.left - leftEdge > indentTol && ln.left - prev.left > indentTol) breakHere = true;
           // A short last line followed by a capital is a paragraph end.
           else if (prev.right < rightEdge - bodyHeight * 3 &&
-                   /[.!?:]["'\u2019\u201D)\]]?$/.test(prev.text) &&
+                   endsSentence(prev.text) &&
                    /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;
         }
       }
@@ -440,7 +446,7 @@
       var continues = prev &&
         b.type === 'p' && prev.type === 'p' &&
         (b.brokeColumn || b.firstOnPage) &&
-        !ENDS_SENTENCE.test(prev.text) &&
+        !endsSentence(prev.text) &&
         /^[a-z(\[]/.test(b.text);
 
       if (continues) {
@@ -455,7 +461,25 @@
     return out;
   }
 
-  var ENDS_SENTENCE = /[.!?:;]["'\u2019\u201D)\]]?$/;
+  var TERMINAL_AT_END = /[.!?:;]["'\u2019\u201D)\]]?$/;
+
+  /**
+   * Does this line really END a sentence?
+   *
+   * A trailing period is not enough: a line ending "and cf." or "et al." or
+   * "Fig." looks terminal to a regex, and the paragraph heuristics then cut the
+   * paragraph in half mid-sentence. The segmenter already knows which periods
+   * are terminators - it masks the others - so ask it.
+   */
+  function endsSentence(text) {
+    var t = String(text || '');
+    if (FR.segmenter && FR.segmenter.mask) {
+      try { return TERMINAL_AT_END.test(FR.segmenter.mask(t)); } catch (e) { /* fall through */ }
+    }
+    return TERMINAL_AT_END.test(t);
+  }
+
+  var ENDS_SENTENCE = TERMINAL_AT_END;
 
   /* ------------------------------------------------------------------ *
    * Public: reflow extraction
@@ -471,6 +495,7 @@
     var perPage = [];
     var allHeights = [];
     var rotatedPages = 0;
+    var strayRotated = 0;
 
     var chain = Promise.resolve();
     for (var n = 1; n <= total; n++) {
@@ -485,7 +510,22 @@
             return page.getTextContent().then(function (tc) {
               var extracted = toBoxes(tc);
               var boxes = extracted.boxes;
-              if (extracted.rotatedRuns) rotatedPages++;
+
+              // Rotated runs mean one of two very different things. A handful
+              // of them are figure decoration - axis labels on a plot, a
+              // sideways table header - which should simply not be read aloud.
+              // A page where MOST runs are rotated is a genuinely rotated page,
+              // and there the axis swap is what makes it readable at all.
+              if (extracted.rotatedRuns) {
+                var mostly = extracted.rotatedRuns > boxes.length * 0.5;
+                if (mostly) {
+                  rotatedPages++;
+                } else {
+                  boxes = boxes.filter(function (b) { return !b.rotated; });
+                  strayRotated += extracted.rotatedRuns;
+                }
+              }
+
               var gutter = detectColumns(boxes, base.width);
               var lines = toLines(boxes, gutter);
               lines.forEach(function (ln) { allHeights.push(ln.h); });
@@ -541,12 +581,16 @@
       var merged = mergeContinuations(blocks);
 
       if (rotatedPages) {
-        // Say so: the axis swap is a best effort, and a reader who sees
-        // scrambled text deserves to know why rather than assuming the
-        // extension is simply broken.
-        notices.push(rotatedPages + ' page' + (rotatedPages === 1 ? ' has' : 's have') +
-                     ' rotated text. Reading order on ' + (rotatedPages === 1 ? 'it' : 'them') +
+        // Only for genuinely sideways pages. The axis swap there is a best
+        // effort, and a reader who sees scrambled text deserves to know why
+        // rather than assuming the extension is broken.
+        notices.push(rotatedPages + ' page' + (rotatedPages === 1 ? ' is' : 's are') +
+                     ' rotated. Reading order on ' + (rotatedPages === 1 ? 'it' : 'them') +
                      ' may be wrong - use Original layout if it looks scrambled.');
+      }
+      if (strayRotated) {
+        notices.push('Skipped ' + strayRotated + ' rotated label' + (strayRotated === 1 ? '' : 's') +
+                     ' (figure axes and similar).');
       }
 
       var twoCol = kept.filter(function (p) { return p.columns === 2; }).length;
@@ -655,6 +699,7 @@
       findRunningHeads: findRunningHeads,
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
+      endsSentence: endsSentence,
       mergeContinuations: mergeContinuations,
       edgeLines: edgeLines,
       isHeadingLine: isHeadingLine,

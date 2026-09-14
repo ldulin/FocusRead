@@ -52,6 +52,12 @@ cd focus-read
 ./scripts/fetch-vendor.sh
 ```
 
+If that reports `Resolving timed out` even though the network works, something
+on the machine is blocking `curl` specifically - an endpoint-security agent or
+a VPN filter will do this on a managed Mac. Check with `nslookup
+registry.npmjs.org`; if that resolves, the script will fall back to Python or
+wget on its own.
+
 Then in Chrome:
 
 1. Go to `chrome://extensions`

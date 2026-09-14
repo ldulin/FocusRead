@@ -60,8 +60,62 @@ if [[ "${1:-}" == "--check" ]]; then
   exit 0
 fi
 
-command -v curl >/dev/null || { red "curl is required."; exit 1; }
-command -v tar  >/dev/null || { red "tar is required.";  exit 1; }
+command -v tar >/dev/null || { red "tar is required."; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Downloader
+#
+# curl is the obvious choice and usually right, but it is not always usable:
+# on a managed Mac an endpoint-security agent can block the curl binary
+# specifically, which shows up as "Resolving timed out" even though the network
+# is fine and other clients work. So try curl, then Python, then openssl, and
+# only give up when none of them can fetch.
+# ---------------------------------------------------------------------------
+
+DOWNLOADER=""
+
+probe_url="https://registry.npmjs.org/pdfjs-dist"
+
+if command -v curl >/dev/null && curl -fsS -o /dev/null --max-time 15 "$probe_url" 2>/dev/null; then
+  DOWNLOADER="curl"
+elif command -v python3 >/dev/null && python3 - "$probe_url" <<'PYPROBE' >/dev/null 2>&1; then
+import sys, socket, urllib.request
+socket.setdefaulttimeout(15)
+urllib.request.urlopen(sys.argv[1]).read(1)
+PYPROBE
+  DOWNLOADER="python3"
+  dim "  curl could not reach the network; using python3 instead"
+elif command -v wget >/dev/null && wget -q -O /dev/null --timeout=15 "$probe_url" 2>/dev/null; then
+  DOWNLOADER="wget"
+  dim "  curl could not reach the network; using wget instead"
+else
+  red "Could not reach https://registry.npmjs.org with curl, python3 or wget."
+  red ""
+  red "The network itself may be fine - check with:"
+  red "    nslookup registry.npmjs.org"
+  red "If that resolves but curl still times out, something on this machine is"
+  red "blocking curl specifically (an endpoint-security agent, a VPN filter)."
+  red ""
+  red "You can also install the libraries by hand - see vendor/README.md."
+  exit 1
+fi
+
+# download <url> <destination-file>
+download() {
+  case "$DOWNLOADER" in
+    curl)   curl -fsSL --retry 3 --connect-timeout 20 "$1" -o "$2" ;;
+    wget)   wget -q --tries=3 --timeout=20 -O "$2" "$1" ;;
+    python3)
+      python3 - "$1" "$2" <<'PYGET'
+import sys, socket, urllib.request, shutil
+socket.setdefaulttimeout(60)
+req = urllib.request.Request(sys.argv[1], headers={'User-Agent': 'focusread-fetch-vendor'})
+with urllib.request.urlopen(req) as r, open(sys.argv[2], 'wb') as f:
+    shutil.copyfileobj(r, f)
+PYGET
+      ;;
+  esac
+}
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -69,15 +123,17 @@ trap 'rm -rf "$tmp"' EXIT
 fetch_npm() {                      # fetch_npm <package> <version> <destdir>
   local pkg="$1" ver="$2" dest="$3"
   local url="https://registry.npmjs.org/${pkg}/-/${pkg}-${ver}.tgz"
+  local tgz="$tmp/${pkg}-${ver}.tgz"
   dim "  downloading ${pkg}@${ver}"
   mkdir -p "$dest"
-  if ! curl -fsSL --retry 3 --connect-timeout 20 "$url" | tar xz -C "$dest"; then
+  if ! download "$url" "$tgz"; then
     red "Failed to download ${pkg}@${ver}"
     red "Tried: $url"
-    red "Check your connection, or pick a version that exists:"
-    red "  curl -s https://registry.npmjs.org/${pkg} | grep -o '\"latest\":\"[^\"]*\"'"
+    red "That version may not exist. The current one is printed by:"
+    red "  python3 -c \"import urllib.request,re;print(re.search(rb'\\\"latest\\\":\\\"([^\\\"]+)',urllib.request.urlopen('https://registry.npmjs.org/${pkg}').read(400000)).group(1).decode())\""
     exit 1
   fi
+  tar xz -C "$dest" -f "$tgz" || { red "Could not unpack ${pkg}-${ver}.tgz"; exit 1; }
 }
 
 echo "Installing into $vendor"
