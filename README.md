@@ -178,6 +178,14 @@ Worth knowing before you rely on it:
 - **Word-level highlighting depends on the voice.** Network voices often report
   nothing, so on-device voices are preferred. If the highlight runs one word
   ahead of the audio, there's a setting for that.
+- **Network voices pause between sentences.** A voice like Microsoft's *Andrew
+  Online (Natural)* is synthesised on a server, and the browser only asks for
+  the next utterance once the current one has ended - so the round trip happens
+  in the silence after every sentence. FocusRead hands such a voice a whole run
+  of sentences at once instead (never crossing a paragraph) and follows along
+  using the word boundaries, so it reads a paragraph in one breath. On-device
+  voices start the next sentence in about 3ms and are left alone. Settings →
+  Voice → *Smooth reading* if you want it off, or on for every voice.
 - **macOS only ships basic voices.** Of the ~180 voices it exposes, most of the
   American English ones are novelty sound effects (Bells, Boing, Zarvox);
   FocusRead hides those and ranks the rest, but the genuinely natural voices are
@@ -197,12 +205,14 @@ loaded directly by the browser.
 python3 scripts/build-web.py # rebuild docs/ after changing src/ or web/
 ```
 
-That runs four checks, none of which need Node.js - they use JavaScriptCore
+That runs six checks, none of which need Node.js - they use JavaScriptCore
 through `osascript -l JavaScript`:
 
 | Check | Covers |
 | --- | --- |
 | `tests/segmenter.cases.js` | sentence splitting against academic punctuation |
+| `tests/voice.cases.js` | which of the ~180 installed voices are worth offering, and how they are grouped |
+| `tests/gapless.cases.js` | which sentences merge into one utterance, and mapping an offset in the merged text back to the sentence it belongs to |
 | `tests/sw.cases.js` | which sites auto-activation registers on, which pages are injectable, the PDF redirect rule |
 | `tests/pdf.cases.js` | column detection, line and paragraph rebuilding, running-head removal, rotated text - with synthetic page data, so no PDF or pdf.js needed |
 | `tests/syntax.sh` | every JS file parses |
@@ -214,7 +224,7 @@ timer-based has to be tested there:
 
 | Page | Covers |
 | --- | --- |
-| `tests/preview/runtime.html` | the speech queue, driven by a fake synthesiser the test advances by hand - normal completion, a piece failing mid-queue, cancellation, one-word lag - plus settings persistence and MyMemory's byte chunking |
+| `tests/preview/runtime.html` | the speech queue, driven by a fake synthesiser the test advances by hand - normal completion, a piece failing mid-queue, cancellation, one-word lag, merged runs and a voice that truncates them - plus settings persistence and MyMemory's byte chunking |
 | `tests/preview/sanitizer.html` | 22 attacks on the `.docx` sanitiser, ending by rendering the output to confirm nothing executes |
 | `tests/segmenter.test.html` | the segmentation cases, in a browser |
 

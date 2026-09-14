@@ -73,6 +73,10 @@
     this._rulerRaf = null;
     this._playGeneration = 0;    // invalidates in-flight auto-advance chains
     this._bilingualGen = 0;      // invalidates in-flight translation batches
+    this._voice = null;          // the voice settings currently resolve to
+    this._runChars = {};         // voiceURI -> how much it will swallow at once
+    this._runUsed = null;        // the budget the run in flight was planned with
+    this._toldAboutRuns = false;
   }
 
   /* ------------------------------------------------------------------ *
@@ -204,6 +208,139 @@
     if (this.ui) {
       this.ui.setState({ rate: s.rate, focus: s.focusMode, bilingual: s.bilingual });
     }
+    this._resolveVoice();
+  };
+
+  /**
+   * Work out which voice the current settings actually resolve to, and keep it.
+   * Gapless reading only applies to network voices, and `speak` resolves the
+   * voice too late and too deep to ask there.
+   */
+  Controller.prototype._resolveVoice = function () {
+    var self = this;
+    FR.speech.getVoices().then(function (voices) {
+      var s = self.settings;
+      if (!s) return;
+      self._voice = FR.speech.pickVoice(
+        voices, s.voiceURI, self.docLang(), s.localVoicesOnly !== false) || null;
+    }, function () { /* no voices, no gapless */ });
+  };
+
+  Controller.prototype._voiceKey = function () {
+    var v = this._voice;
+    return v ? String(v.voiceURI || v.name) : '';
+  };
+
+  /**
+   * How much text to hand the voice at once: what the reader asked for, capped
+   * by what this voice has proved it will actually swallow.
+   *
+   * A cap, not an override - otherwise a reader who shortens the runs because
+   * skipping feels unresponsive is held at the longer learned value instead,
+   * and their setting appears to do nothing.
+   */
+  Controller.prototype._runBudget = function (key) {
+    var want = Number(this.settings.gaplessChars) || FR.speech.RUN_CHARS;
+    var learned = this._runChars[key];
+    return (typeof learned === 'number') ? Math.min(want, learned) : want;
+  };
+
+  /** It cut a run off part-way: ask for less next time, and say so once. */
+  Controller.prototype._shortenRuns = function (key) {
+    // Halve what the run that just failed actually used, which is not always
+    // what _runBudget would offer: a voice that reports no words has its runs
+    // held down further still, and halving the larger figure would spend
+    // another truncated run getting back to where we already were.
+    var used = (typeof this._runUsed === 'number') ? this._runUsed : this._runBudget(key);
+    var next = Math.floor(used / 2);
+    this._runChars[key] = next;
+    if (next < FR.speech.RUN_MIN_CHARS && !this._toldAboutRuns) {
+      this._toldAboutRuns = true;
+      this.ui.toast('This voice cuts off long stretches, so FocusRead is back ' +
+                    'to one sentence at a time.', 4500);
+    }
+  };
+
+  /**
+   * The sentences to speak as one utterance, starting at the current one.
+   *
+   * Merging is for network voices and nothing else: they pay a round trip to
+   * the synthesis server in the silence between utterances (speech.js quirk
+   * 8), while an on-device voice starts the next one in about 3ms and gains
+   * nothing from a change that costs responsiveness. It also needs the voice to
+   * report which word it is speaking, since that is the only thing that can
+   * say which sentence a long utterance has reached - so the first sentence of
+   * any document is always spoken alone, to find that out.
+   *
+   * @returns {Array<{i:number, text:string}>} one entry to speak normally
+   */
+  Controller.prototype._planRun = function () {
+    var s = this.settings, eng = this.engine, i = eng.index;
+    var rec = eng.get(i);
+    var single = [{ i: i, text: rec ? rec.text : '' }];
+
+    if (s.gaplessMode === 'off') return single;
+    // Each of these wants a real break between sentences, or needs to act
+    // between them, which a single utterance cannot be interrupted for.
+    // Clause mode is NOT among them: it makes the units shorter still, so the
+    // gap between them is where a network voice sounds worst.
+    if (!s.autoAdvance || s.speakTranslation) return single;
+    if (Number(s.pauseBetween) > 0) return single;
+
+    var v = this._voice;
+    if (!v) return single;
+    // _resolveVoice is asynchronous, so just after a voice change this still
+    // holds the previous one. Plan for one sentence rather than apply the old
+    // voice's policy to the new voice.
+    if (s.voiceURI && v.voiceURI !== s.voiceURI) return single;
+    if (s.gaplessMode !== 'always' && !FR.speech.isNetworkVoice(v)) return single;
+
+    var key = this._voiceKey();
+    var words = FR.speech.emitsBoundaries(key);
+    // Asking for it explicitly overrides this: without word reports the
+    // sentence highlight falls back to an estimated cadence, which is already
+    // what such a voice gets today - just now spread over a run, where the
+    // guess has longer to drift. That is a trade worth offering, not making.
+    if (s.gaplessMode !== 'always' && words !== true) return single;
+
+    var budget = this._runBudget(key);
+    // A voice that reports no words leaves the highlight riding a guessed
+    // reading speed for the whole utterance, with nothing to re-sync it until
+    // the next one starts. Keep those runs to the shortest that is still worth
+    // merging, so the guess has less room to drift away from the audio.
+    if (words === false) budget = Math.min(budget, FR.speech.RUN_MIN_CHARS);
+    if (budget < FR.speech.RUN_MIN_CHARS) return single;
+
+    this._runUsed = budget;
+    return FR.speech.planRun(eng.sentences, i, { budget: budget });
+  };
+
+  /**
+   * Clear up after a sentence (or a run) and move on. Split out of
+   * speakCurrent so the one-utterance and merged-run paths cannot drift apart.
+   */
+  Controller.prototype._finishAndAdvance = function (rec, generation, mine) {
+    var self = this, s = this.settings;
+    this.engine.clearWord();
+
+    var advance = function () {
+      if (!mine()) return;
+      if (s.autoAdvance && self.engine.index < self.engine.count() - 1) {
+        var go = function () {
+          if (!mine()) return;
+          self.engine.setCurrent(self.engine.index + 1, { scroll: s.scrollFollow });
+          self.speakCurrent();
+        };
+        s.pauseBetween > 0 ? setTimeout(go, s.pauseBetween) : go();
+      } else {
+        self.playing = false;
+        self.ui.setState({ playing: false });
+      }
+    };
+
+    // Hear it again in your own language before moving on.
+    if (s.speakTranslation && rec) self._speakTranslation(rec, generation).then(advance, advance);
+    else advance();
   };
 
   /* ------------------------------------------------------------------ *
@@ -226,42 +363,14 @@
     this.playing = true;
     this.ui.setState({ playing: true, index: rec.i, total: this.engine.count() });
 
-    FR.speech.speak(rec.text, {
+    var common = {
       voiceURI: s.voiceURI,
       rate: s.rate,
       pitch: s.pitch,
       volume: s.volume,
       lang: this.docLang(),
-      maxChars: s.maxUtteranceChars,
       localOnly: s.localVoicesOnly,
       lagWord: s.wordHighlightLag,
-      onboundary: function (b) {
-        if (!mine()) return;
-        if (s.highlightWords) self.engine.highlightWord(rec.i, b.charIndex, b.charLength);
-      },
-      onend: function () {
-        if (!mine()) return;
-        self.engine.clearWord();
-
-        var advance = function () {
-          if (!mine()) return;
-          if (s.autoAdvance && self.engine.index < self.engine.count() - 1) {
-            var go = function () {
-              if (!mine()) return;
-              self.engine.setCurrent(self.engine.index + 1, { scroll: s.scrollFollow });
-              self.speakCurrent();
-            };
-            s.pauseBetween > 0 ? setTimeout(go, s.pauseBetween) : go();
-          } else {
-            self.playing = false;
-            self.ui.setState({ playing: false });
-          }
-        };
-
-        // Hear it again in your own language before moving on.
-        if (s.speakTranslation) self._speakTranslation(rec, generation).then(advance, advance);
-        else advance();
-      },
       onerror: function (e) {
         if (!self.active) return;
         self.playing = false;
@@ -271,7 +380,57 @@
           ? 'This browser has no speech engine available.'
           : 'Speech stopped (' + e.error + '). Press play to continue.', 4000);
       }
-    }).catch(function () { /* reported through onerror */ });
+    };
+
+    // A network voice reads a whole run of sentences in one breath; see
+    // _planRun. Everything else keeps the one-utterance-per-sentence path.
+    var run = this._planRun();
+    if (run.length > 1) {
+      var key = this._voiceKey();
+      FR.speech.speakRun(run, Object.assign({}, common, {
+        onsentence: function (i) {
+          if (!mine()) return;
+          if (i === self.engine.index) return;       // the run's first
+          self.engine.setCurrent(i, { scroll: s.scrollFollow });
+          self.ui.setState({ index: i, total: self.engine.count() });
+        },
+        onboundary: function (i, b) {
+          if (!mine()) return;
+          if (s.highlightWords) self.engine.highlightWord(i, b.charIndex, b.charLength);
+        },
+        onend: function (ev) {
+          if (!mine()) return;
+          // The last sentence of the run may have ended before a boundary
+          // landed in it; without this it would be read a second time.
+          if (ev.index >= 0 && ev.index !== self.engine.index) {
+            self.engine.setCurrent(ev.index, { scroll: s.scrollFollow });
+          }
+          self._finishAndAdvance(self.engine.current(), generation, mine);
+        },
+        ontruncated: function (ev) {
+          if (!mine()) return;
+          self._shortenRuns(key);
+          self.engine.clearWord();
+          // Pick up from where the voice actually got to and say that sentence
+          // again from the start: it was cut off part-way through.
+          if (ev.index >= 0) self.engine.setCurrent(ev.index, { scroll: s.scrollFollow });
+          self.speakCurrent();
+        }
+      })).catch(function () { /* reported through onerror */ });
+      return;
+    }
+
+    FR.speech.speak(rec.text, Object.assign({}, common, {
+      maxChars: s.maxUtteranceChars,
+      onboundary: function (b) {
+        if (!mine()) return;
+        if (s.highlightWords) self.engine.highlightWord(rec.i, b.charIndex, b.charLength);
+      },
+      onend: function () {
+        if (!mine()) return;
+        self._finishAndAdvance(rec, generation, mine);
+      }
+    })).catch(function () { /* reported through onerror */ });
   };
 
   /**

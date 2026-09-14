@@ -732,6 +732,14 @@
       var c = state.controller;
       c.engine.setCurrent(idx, { scroll: true });
       c.ui.setState({ index: idx });
+      // While it is reading, move the READING, not just the highlight. A
+      // merged run would otherwise paint over this within a word - its next
+      // word boundary re-asserts whichever sentence the run is on - and even
+      // one sentence at a time only honoured the click at the next full stop.
+      // Paused counts: play() resumes the utterance that was interrupted, so
+      // without dropping it the click would be forgotten on the next press.
+      if (c.playing) c.speakCurrent();
+      else if (FR.speech.state() === 'paused') FR.speech.cancel();
       flash(mark, true);
     }, true);
   }

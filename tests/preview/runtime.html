@@ -43,6 +43,37 @@
   Object.defineProperty(window, 'SpeechSynthesisUtterance', { value: FakeUtterance, configurable: true });
   window.__fake = fake;
 
+  /**
+   * Like __drive, but lets opts.holdMs of real time pass before each utterance
+   * ends. A merged run that reports no words can only be judged by the clock,
+   * so "was cut off" and "took as long as saying it would" have to be
+   * distinguishable in a test. Returns a promise.
+   */
+  window.__driveSlow = function (opts) {
+    opts = opts || {};
+    var queue = fake._queue.splice(0);
+    var n = 0;
+    return queue.reduce(function (chain, u) {
+      return chain.then(function () {
+        fake.speaking = true;
+        if (u.onstart) u.onstart();
+        (opts.boundaries || []).forEach(function (b) {
+          if (u.onboundary) {
+            u.onboundary({
+              name: 'word',
+              charIndex: b.charIndex,
+              charLength: b.charLength === undefined ? 3 : b.charLength
+            });
+          }
+        });
+        return new Promise(function (r) { setTimeout(r, opts.holdMs || 0); });
+      }).then(function () {
+        if (u.onend) u.onend();
+        n++;
+      });
+    }, Promise.resolve()).then(function () { fake.speaking = false; return n; });
+  };
+
   /** Run the queued utterances. opts.failAt = index that errors instead of ending. */
   window.__drive = function (opts) {
     opts = opts || {};
@@ -55,6 +86,20 @@
         for (var b = 0; b < opts.boundariesPerPiece; b++) {
           if (u.onboundary) u.onboundary({ name: 'word', charIndex: b * 4, charLength: 3 });
         }
+      }
+      // A merged run needs boundaries at chosen offsets: which sentence the
+      // reader is on is derived from them, so "some word somewhere" proves
+      // nothing. A run that stops early is how a truncating voice behaves.
+      if (opts.boundaries) {
+        opts.boundaries.forEach(function (b) {
+          if (u.onboundary) {
+            u.onboundary({
+              name: 'word',
+              charIndex: b.charIndex,
+              charLength: b.charLength === undefined ? 3 : b.charLength
+            });
+          }
+        });
       }
       if (opts.failAt === i) {
         if (u.onerror) u.onerror({ error: 'synthesis-failed' });
@@ -70,9 +115,9 @@
 </script>
 
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
-<script src="../../src/lib/settings.js?v=1789365993"></script>
+<script src="../../src/lib/settings.js?v=1789409887"></script>
 <script src="../../src/lib/translate.js?v=1789357531"></script>
-<script src="../../src/content/speech.js?v=1789357633"></script>
+<script src="../../src/content/speech.js?v=1789412736"></script>
 <script src="../../src/content/engine.js?v=1789366280"></script>
 
 <script>
@@ -278,6 +323,229 @@
        chunksC.every(function (c) { return !/[\uD800-\uDBFF]$/.test(c); }), true);
 
     eq('short text is returned untouched', FR.translate.byteChunks('Short.', 480), ['Short.']);
+
+    /* ================= gapless runs ================= */
+    section('speech - a run of sentences in one utterance');
+
+    var RUN = [
+      { i: 3, text: 'Alpha beta gamma.' },      // [0, 17)
+      { i: 4, text: 'Delta epsilon zeta.' },    // [18, 37)
+      { i: 5, text: 'Eta theta iota.' }         // [38, 53)
+    ];
+
+    function runRecorder() {
+      var ev = { start: 0, end: [], sentences: [], words: [], truncated: [], error: [] };
+      return {
+        ev: ev,
+        opts: {
+          rate: 1, localOnly: true,
+          onstart: function () { ev.start++; },
+          onsentence: function (i) { ev.sentences.push(i); },
+          onboundary: function (i, b) { ev.words.push([i, b.charIndex]); },
+          onend: function (e) { ev.end.push(e.index); },
+          ontruncated: function (e) { ev.truncated.push(e.index); },
+          onerror: function (e) { ev.error.push(e.error); }
+        }
+      };
+    }
+
+    var rr = runRecorder();
+    var rp = FR.speech.speakRun(RUN, rr.opts);
+    await sleep(90);
+    eq('the whole run is a single utterance, however long it is',
+       window.__fake._queue.length, 1);
+    eq('and it holds every sentence, joined',
+       window.__fake._queue[0].text, 'Alpha beta gamma. Delta epsilon zeta. Eta theta iota.');
+
+    // Words at 0 (first sentence), 18 and 25 (second), 38 and 50 (third).
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 }, { charIndex: 18, charLength: 5 },
+      { charIndex: 25, charLength: 7 }, { charIndex: 38, charLength: 3 },
+      { charIndex: 50, charLength: 4 }
+    ] });
+    await rp.catch(function () {});
+    await sleep(20);
+
+    eq('onstart still fires once for the run', rr.ev.start, 1);
+    eq('each sentence is announced once, in order', rr.ev.sentences, [3, 4, 5]);
+    eq('word offsets are reported inside the right sentence',
+       rr.ev.words, [[3, 0], [4, 0], [4, 7], [5, 0], [5, 12]]);
+    eq('the run ends on its last sentence', rr.ev.end, [5]);
+    eq('a completed run is not mistaken for a truncated one', rr.ev.truncated, []);
+    eq('no error', rr.ev.error, []);
+
+    section('speech - a voice that cuts the run off');
+
+    var rt = runRecorder();
+    var tp = FR.speech.speakRun(RUN, rt.opts);
+    await sleep(90);
+    // It speaks the first sentence and then stops, reporting a normal end.
+    window.__drive({ boundaries: [{ charIndex: 0, charLength: 5 }, { charIndex: 6, charLength: 4 }] });
+    await tp.catch(function () {});
+    await sleep(20);
+    eq('stopping a fifth of the way in is reported as truncation', rt.ev.truncated, [3]);
+    eq('and not as a normal end', rt.ev.end, []);
+    eq('the sentences it did reach were still announced', rt.ev.sentences, [3]);
+
+    section('speech - a voice that reports no words at all');
+
+    // RUN is 53 chars / 9 words. At rate 2 that is 9 x 166ms = 1.5s of
+    // reading, so ending inside 750ms is proof of a cut and holding past it
+    // is proof of none - the clock is the only witness such a voice leaves.
+    var rq = runRecorder();
+    rq.opts.rate = 2;
+    var qp = FR.speech.speakRun(RUN, rq.opts);
+    await sleep(90);
+    window.__drive({});                                 // ends in the same tick
+    await qp.catch(function () {});
+    await sleep(20);
+    eq('ending in no time at all is a cut, not a finished run', rq.ev.truncated, [3]);
+    eq('so the run is not reported as read', rq.ev.end, []);
+
+    var rs = runRecorder();
+    rs.opts.rate = 2;
+    var sp2 = FR.speech.speakRun(RUN, rs.opts);
+    await sleep(90);
+    await window.__driveSlow({ holdMs: 900 });          // took as long as saying it
+    await sp2.catch(function () {});
+    await sleep(20);
+    eq('taking as long as the words would is a finished run', rs.ev.end, [5]);
+    eq('and is not reported as a cut', rs.ev.truncated, []);
+
+    section('speech - a cut that a fraction-of-the-run test cannot see');
+
+    // 53 chars, and the sentence that is lost is the last 5 of them: the words
+    // reach 47/53 = 89% of the run, so any "did it get most of the way" test
+    // calls this finished and the reader never hears the last sentence.
+    var TAIL_RUN = [
+      { i: 20, text: 'Alpha beta gamma delta.' },     // [0, 23)
+      { i: 21, text: 'Epsilon zeta eta theta.' },     // [24, 47)
+      { i: 22, text: 'Iota.' }                        // [48, 53)
+    ];
+    var rc = runRecorder();
+    rc.opts.rate = 2;
+    var cp = FR.speech.speakRun(TAIL_RUN, rc.opts);
+    await sleep(90);
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 }, { charIndex: 18, charLength: 5 },
+      { charIndex: 24, charLength: 7 }, { charIndex: 42, charLength: 5 }
+    ] });
+    await cp.catch(function () {});
+    await sleep(20);
+    eq('the unspoken last sentence is caught', rc.ev.truncated, [22]);
+    eq('and the run is not reported as read', rc.ev.end, []);
+    eq('the sentences that were spoken were still announced', rc.ev.sentences, [20, 21]);
+
+    section('speech - a stingy voice is not mistaken for a cut');
+
+    // Words land in the first and last sentence but none in the middle one.
+    // That is a voice being sparing with events, not a cut: a cut cannot
+    // resume after the gap it made.
+    var rg = runRecorder();
+    rg.opts.rate = 2;
+    var gp = FR.speech.speakRun(TAIL_RUN, rg.opts);
+    await sleep(90);
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 }, { charIndex: 48, charLength: 4 }
+    ] });
+    await gp.catch(function () {});
+    await sleep(20);
+    eq('a hole in the middle is not a cut', rg.ev.truncated, []);
+    eq('the run is reported as read', rg.ev.end, [22]);
+
+    section('speech - a cut inside the last sentence');
+
+    var rl = runRecorder();
+    rl.opts.rate = 2;
+    var lp = FR.speech.speakRun(TAIL_RUN, rl.opts);
+    await sleep(90);
+    // Words in all three sentences, but they stop after the first word of the
+    // last one - which here is its only word, so the run IS complete.
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 }, { charIndex: 24, charLength: 7 },
+      { charIndex: 48, charLength: 4 }
+    ] });
+    await lp.catch(function () {});
+    await sleep(20);
+    eq('reaching the end of the last sentence is a finished run', rl.ev.end, [22]);
+
+    var rm = runRecorder();
+    rm.opts.rate = 2;
+    var mp = FR.speech.speakRun([
+      { i: 30, text: 'Alpha beta.' },
+      { i: 31, text: 'A much longer closing sentence that carries on well past the middle of itself.' }
+    ], rm.opts);
+    await sleep(90);
+    // It gets four words into a 78-character sentence and stops.
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 }, { charIndex: 12, charLength: 1 },
+      { charIndex: 14, charLength: 4 }, { charIndex: 19, charLength: 6 }
+    ] });
+    await mp.catch(function () {});
+    await sleep(20);
+    eq('stopping part-way through the last sentence is a cut', rm.ev.truncated, [31]);
+
+    section('speech - an out-of-range offset must not hijack the run');
+
+    // Quirk 4: speak() clamps an out-of-range charIndex to the last character
+    // of the utterance, which in a run belongs to the LAST sentence. Believing
+    // it would strand the highlight there and hide the cut.
+    var rj = runRecorder();
+    rj.opts.rate = 2;
+    var jp = FR.speech.speakRun(TAIL_RUN, rj.opts);
+    await sleep(90);
+    window.__drive({ boundaries: [
+      { charIndex: 0, charLength: 5 },
+      { charIndex: 9999, charLength: 4 },               // arrives clamped to 52
+      { charIndex: 6, charLength: 4 }, { charIndex: 11, charLength: 5 }
+    ] });
+    await jp.catch(function () {});
+    await sleep(20);
+    eq('the reader is not dragged to the last sentence', rj.ev.sentences, [20]);
+    eq('every word is still reported inside the first sentence',
+       rj.ev.words.map(function (w) { return w[0]; }), [20, 20, 20]);
+    // Sentence 20 itself, not 21: its words stopped at 'gamma', 7 characters
+    // short of its end, so resuming at 21 would lose 'delta.' unread.
+    eq('and the cut it would have hidden is still found', rj.ev.truncated, [20]);
+
+    // An offset that is wrong but IN range is not clamped, so distance is the
+    // only thing left to judge it by.
+    var LONG_RUN = [
+      { i: 40, text: 'A' + new Array(60).join(' word') + '.' },   // 296 chars
+      { i: 41, text: 'B' + new Array(60).join(' word') + '.' }
+    ];
+    var rd = runRecorder();
+    rd.opts.rate = 2;
+    var dp = FR.speech.speakRun(LONG_RUN, rd.opts);
+    await sleep(90);
+    window.__drive({ boundaries: [
+      { charIndex: 2, charLength: 4 },
+      { charIndex: 400, charLength: 4 },                // in range, 398 ahead
+      { charIndex: 7, charLength: 4 }
+    ] });
+    await dp.catch(function () {});
+    await sleep(20);
+    eq('an offset that skips too far ahead is disbelieved', rd.ev.sentences, [40]);
+
+    section('speech - a run of one behaves like a plain sentence');
+
+    var ro = runRecorder();
+    var op = FR.speech.speakRun([{ i: 7, text: 'Just the one sentence here.' }], ro.opts);
+    await sleep(90);
+    eq('one utterance', window.__fake._queue.length, 1);
+    window.__drive({ boundaries: [{ charIndex: 0, charLength: 4 }, { charIndex: 22, charLength: 4 }] });
+    await op.catch(function () {});
+    await sleep(20);
+    eq('its sentence is announced', ro.ev.sentences, [7]);
+    eq('and it ends cleanly', ro.ev.end, [7]);
+    eq('reaching the last word is not truncation', ro.ev.truncated, []);
+
+    eq('an empty run ends immediately rather than hanging',
+       (await (function () {
+          var e = [];
+          return FR.speech.speakRun([], { onend: function (x) { e.push(x.spoken); } })
+            .then(function () { return e; });
+        })()), [0]);
 
     document.getElementById('out').dataset.done = '1';
 

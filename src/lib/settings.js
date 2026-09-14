@@ -30,6 +30,8 @@
     clauseMaxLen: 220,            // split sentences longer than this in clause mode
     pauseBetween: 0,              // ms of silence between sentences
     maxUtteranceChars: 200,       // Chrome truncates longer utterances
+    gaplessMode: 'auto',          // 'auto' (network voices) | 'off' | 'always'
+    gaplessChars: 700,            // how much of a paragraph to read in one go
     localVoicesOnly: true,        // remote voices rarely emit word boundaries
     voiceFilter: 'en-US',         // 'en-US' | 'english' | 'all'
 

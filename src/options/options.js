@@ -62,7 +62,13 @@
           { key: 'pitch', type: 'range', label: 'Pitch', min: 0.5, max: 1.8, step: 0.05 },
           { key: 'volume', type: 'range', label: 'Volume', min: 0, max: 1, step: 0.05 },
           { key: 'maxUtteranceChars', type: 'number', label: 'Split speech every', min: 80, max: 400, step: 10,
-            hint: 'Characters. Chrome truncates long utterances, so sentences are spoken in pieces. Lower this if speech cuts off.' }
+            hint: 'Characters. Chrome truncates long utterances, so sentences are spoken in pieces. Lower this if speech cuts off.' },
+          { key: 'gaplessMode', type: 'select', label: 'Smooth reading',
+            options: [['auto', 'On for network voices'], ['always', 'On for every voice'], ['off', 'Off']],
+            hint: 'A network voice - anything named "Online" or "Natural" - fetches its audio between utterances, which puts a gap at every sentence break and breaks the sentence-to-sentence rhythm. This reads a whole run of sentences in one request instead, so it flows. On-device voices start the next sentence in about 3ms and have no gap to remove; pick "every voice" if one still sounds choppy, or if a network voice you want is not being smoothed.' },
+          { key: 'gaplessChars', type: 'number', label: 'Read ahead in runs of', min: 260, max: 1400, step: 20,
+            hint: 'Characters, never crossing a paragraph. Longer runs flow better; shorter ones react faster when you skip. FocusRead shortens this by itself if the voice turns out to cut long stretches off.',
+            showIf: function (s) { return s.gaplessMode !== 'off'; } }
         ]
       }, {
         title: 'Getting a better voice',

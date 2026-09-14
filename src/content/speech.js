@@ -24,6 +24,17 @@
  *     so the highlight still tracks, re-synced at every sub-utterance.
  *  7. getVoices() is empty until the engine loads; resolved via `voiceschanged`
  *     with a timeout, because some builds never fire it.
+ *  8. The browser speaks QUEUED utterances strictly one at a time and only
+ *     asks the engine for the next one once the current one has ended. For a
+ *     network voice - Microsoft's "Online (Natural)" voices, Google's - that
+ *     means the round trip to the synthesis server happens in the silence
+ *     between utterances, so reading one sentence per utterance puts an
+ *     audible hole at every sentence boundary and breaks the prosody across
+ *     it. Queueing further ahead cannot help; only asking for fewer, longer
+ *     utterances can. `speakRun` therefore speaks a whole run of sentences as
+ *     ONE utterance and uses the voice's word boundaries to work out which
+ *     sentence is being spoken. See `speakRun` for how a voice that truncates
+ *     long utterances is detected and backed away from.
  */
 (function (root) {
   'use strict';
@@ -35,6 +46,7 @@
   var cadence = null;          // estimated-cadence interval
   var cadenceStarter = null;   // the timer that would START one
   var cadenceState = null;     // enough to resume an estimated cadence
+  var boundarySeen = {};       // voiceURI -> does this voice report words?
 
   var RATE_MIN = 0.5, RATE_MAX = 2.0;   // above 2.0 remote voices go silent
 
@@ -346,6 +358,7 @@
           if (mine !== token) return resolve();
 
           var voice = pickVoice(voices, opts.voiceURI, opts.lang, opts.localOnly !== false);
+          var vkey = voice ? String(voice.voiceURI || voice.name) : '';
           var pieces = splitForSpeech(full, opts.maxChars);
           var lastBoundary = null;      // for lagWord (quirk 3)
           var sawBoundary = false;
@@ -355,9 +368,17 @@
           function emit(b) {
             if (mine !== token || !opts.onboundary) return;
             // Clamp: macOS has a history of out-of-range word ranges.
-            var ci = Math.max(0, Math.min(full.length - 1, b.charIndex | 0));
+            var raw = b.charIndex | 0;
+            var ci = Math.max(0, Math.min(full.length - 1, raw));
             var len = Math.max(1, Math.min(full.length - ci, b.charLength | 0));
-            opts.onboundary({ charIndex: ci, charLength: len, estimated: !!b.estimated });
+            // Say so when it had to be clamped. Within one sentence the
+            // clamped offset is harmless, but a merged run spans several and
+            // the clamp always lands in the LAST of them - which a caller
+            // tracking sentences has to be able to disbelieve.
+            opts.onboundary({
+              charIndex: ci, charLength: len,
+              estimated: !!b.estimated, clamped: raw !== ci
+            });
           }
 
           pieces.every(function (piece, pi) {
@@ -398,6 +419,7 @@
               if (mine !== token) return;
               if (e.name && e.name !== 'word') return;
               sawBoundary = true;
+              if (vkey) boundarySeen[vkey] = true;
               stopCadence();
 
               var ci = piece.start + (typeof e.charIndex === 'number' ? e.charIndex : 0);
@@ -418,6 +440,12 @@
               if (mine !== token) return resolve();
               finished++;
               if (finished < pieces.length) return;
+              // Remember whether this voice reports words, but only judge it on
+              // an utterance long enough to have contained several: a two-word
+              // heading proves nothing either way.
+              if (vkey && full.length >= 40 && boundarySeen[vkey] !== true) {
+                boundarySeen[vkey] = !!sawBoundary;
+              }
               stopHeartbeat();
               stopCadence();
               if (opts.lagWord && lastBoundary) emit(lastBoundary);
@@ -465,6 +493,273 @@
           });
         }, 30);
       });
+    });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Gapless runs (quirk 8)
+   * ------------------------------------------------------------------ */
+
+  var RUN_CHARS = 700;          // most text handed to a single utterance
+  var RUN_SENTENCES = 6;
+  var RUN_MIN_CHARS = 260;      // a run shorter than this is not worth it
+  var MAX_WORD_JUMP = 160;      // chars one word boundary may plausibly skip
+  var EARLY_END = 0.5;          // of the estimated duration: below this it was cut
+  var WPM = 180;                // a typical synthesiser pace at rate 1.0
+
+  /** Roughly how long `text` should take to say, in ms. */
+  function estimateSpeechMs(text, rate) {
+    var words = (String(text == null ? '' : text).match(/\S+/g) || []).length;
+    return words * Math.max(90, 60000 / (WPM * Math.max(0.1, rate)));
+  }
+
+  /**
+   * Where the unspoken tail of a run starts, or -1 if every sentence in it was
+   * reached.
+   *
+   * Only a TRAILING gap means the voice stopped: an engine that is simply
+   * stingy with word events leaves holes in the middle, and re-reading a
+   * paragraph over that would be a worse noise than the gap being removed.
+   *
+   * @param {number} count how many sentences the run has
+   * @param {Array<boolean>} spoken which of them a word landed in
+   */
+  function unspokenTail(count, spoken) {
+    var k = count;
+    while (k > 0 && !(spoken || [])[k - 1]) k--;
+    return k < count ? k : -1;
+  }
+
+  /**
+   * Whether a voice reports which word it is speaking, learned by listening.
+   * @returns {boolean|undefined} undefined until it has spoken something long
+   *   enough for the answer to mean anything.
+   */
+  function emitsBoundaries(voiceURI) {
+    var k = String(voiceURI || '');
+    if (!k || !(k in boundarySeen)) return undefined;
+    return boundarySeen[k];
+  }
+
+  /**
+   * Is this voice synthesised on a server?
+   *
+   * `localService` is the proper answer, but the name is worth reading too:
+   * whether a browser sets the flag correctly for its own hosted voices is not
+   * something this code can verify on every build, and getting it wrong here
+   * would silently withhold the fix from exactly the voices that need it.
+   * Guessing wrong the other way merely merges a voice that did not need it.
+   */
+  function isNetworkVoice(v) {
+    if (!v) return false;
+    if (v.localService === false) return true;
+    // "Microsoft Andrew Online (Natural)", "Google US English".
+    return /\b(online|natural)\b/i.test(String(v.name || ''));
+  }
+
+  /**
+   * Which consecutive sentences may be spoken as one utterance.
+   *
+   * A run never crosses a paragraph: the pause at a paragraph break is one a
+   * reader wants, and it also keeps a run from growing without limit. Pure, so
+   * the policy is testable without a speech engine.
+   *
+   * @param {Array<{text:string, blockEl:*}>} recs engine sentence records
+   * @param {number} index first sentence of the run
+   * @param {{budget?:number, maxSentences?:number}} opts
+   * @returns {Array<{i:number, text:string}>} always at least the sentence at
+   *   `index`, so a caller can speak the result unconditionally
+   */
+  function planRun(recs, index, opts) {
+    opts = opts || {};
+    var budget = Math.max(1, opts.budget || RUN_CHARS);
+    var most = Math.max(1, opts.maxSentences || RUN_SENTENCES);
+    var first = recs && recs[index];
+    if (!first) return [];
+
+    var out = [{ i: index, text: String(first.text == null ? '' : first.text) }];
+    var chars = out[0].text.length;
+    for (var k = index + 1; k < recs.length && out.length < most; k++) {
+      var r = recs[k];
+      if (!r || r.blockEl !== first.blockEl) break;
+      var t = String(r.text == null ? '' : r.text);
+      // Stop rather than skip: a run has to stay contiguous, or the sentence
+      // in the hole would never be spoken at all.
+      if (!t.trim()) break;
+      if (chars + 1 + t.length > budget) break;
+      out.push({ i: k, text: t });
+      chars += 1 + t.length;
+    }
+    return out;
+  }
+
+  /** The run as one string, with each sentence's offsets inside it. */
+  function runSpans(run) {
+    var spans = [], text = '';
+    (run || []).forEach(function (seg) {
+      var t = String(seg.text == null ? '' : seg.text).trim();
+      if (!t) return;
+      if (text) text += ' ';
+      var start = text.length;
+      text += t;
+      spans.push({ i: seg.i, start: start, end: text.length });
+    });
+    return { text: text, spans: spans };
+  }
+
+  /**
+   * The sentence an absolute offset falls in. The space joining two sentences
+   * belongs to the one that FOLLOWS it: a boundary event fires just before the
+   * word it names, so an offset there means the next sentence is starting.
+   */
+  function spanAt(spans, ci) {
+    for (var k = 0; k < spans.length; k++) {
+      if (ci < spans[k].end) return spans[k];
+    }
+    return spans.length ? spans[spans.length - 1] : null;
+  }
+
+  /**
+   * Speak several consecutive sentences as ONE utterance, so a network voice
+   * makes one request and streams through them without a hole at every
+   * sentence boundary (quirk 8). Which sentence is being spoken comes from the
+   * word boundaries, translated back into per-sentence offsets.
+   *
+   * @param {Array<{i:number, text:string}>} run from planRun
+   * @param {object} opts as `speak`, plus:
+   *   onsentence(i)            the run has moved into sentence `i`
+   *   onboundary(i, b)         word boundary, offsets relative to sentence `i`
+   *   onend({index, spoken})   the whole run finished
+   *   ontruncated({index, reached, early})  the voice stopped early - it will
+   *     not take an utterance this long, and the caller should shorten the run
+   *     and carry on from `index`, the first sentence that was not finished.
+   * @returns {Promise<void>}
+   */
+  function speakRun(run, opts) {
+    opts = opts || {};
+    var joined = runSpans(run);
+    var spans = joined.spans;
+    if (!spans.length) {
+      if (opts.onend) opts.onend({ index: -1, spoken: 0 });
+      return Promise.resolve();
+    }
+
+    var cur = null, lastCi = -1, lastEnd = 0, real = false, startedAt = 0;
+    var spoken = [];                 // did a word land in each sentence?
+    var rate = clamp(opts.rate, RATE_MIN, RATE_MAX, 1);
+
+    function report(b) {
+      var ci = b.charIndex, len = b.charLength;
+      // Quirk 4: an out-of-range offset is clamped to the utterance's last
+      // character - which in a merged run belongs to a different SENTENCE.
+      // Believing one would pin the reader on the run's last sentence for the
+      // rest of the run, because the tracker only moves forwards, and would
+      // mark that sentence spoken and so hide a real truncation.
+      if (b.clamped) return;
+      // The same damage from an offset that is merely wrong rather than out of
+      // range. No single word boundary skips this far ahead.
+      if (lastCi >= 0 && ci > lastCi + MAX_WORD_JUMP) return;
+
+      var sp = spanAt(spans, ci);
+      if (!sp) return;
+      lastCi = Math.max(lastCi, ci);
+      lastEnd = Math.max(lastEnd, ci + len);
+      if (!b.estimated) real = true;
+
+      // Only ever forwards: an engine that reports an odd early offset must
+      // not drag the reader back to a sentence already spoken.
+      if (!cur || sp.start > cur.start) {
+        cur = sp;
+        if (opts.onsentence) opts.onsentence(sp.i);
+      }
+      spoken[spans.indexOf(cur)] = true;
+
+      if (!opts.onboundary) return;
+      var rel = Math.max(0, ci - cur.start);
+      var room = Math.max(1, (cur.end - cur.start) - rel);
+      opts.onboundary(cur.i, {
+        charIndex: rel,
+        charLength: Math.max(1, Math.min(room, len)),
+        estimated: !!b.estimated
+      });
+    }
+
+    /** How far short of this sentence's end the words stopped. */
+    function shortOf(sp) { return sp.end - lastEnd; }
+
+    return speak(joined.text, {
+      voiceURI: opts.voiceURI,
+      rate: opts.rate,
+      pitch: opts.pitch,
+      volume: opts.volume,
+      lang: opts.lang,
+      localOnly: opts.localOnly,
+      lagWord: opts.lagWord,
+      // The whole point: one utterance, so one request and one audio stream.
+      maxChars: joined.text.length + 1,
+      onstart: function (e) {
+        startedAt = Date.now();
+        cur = spans[0];
+        if (opts.onsentence) opts.onsentence(spans[0].i);
+        if (opts.onstart) opts.onstart(e);
+      },
+      onboundary: function (b) {
+        report(b);
+      },
+      onend: function () {
+        // A voice that will not take an utterance this long (quirks 1 and 2)
+        // ends NORMALLY, just early. Reporting that as a finished run is the
+        // expensive mistake: the caller marks every sentence in it read and
+        // moves on to the next paragraph, so the reader silently loses most of
+        // the page. Two witnesses, because neither covers the other's ground.
+        var last = spans[spans.length - 1];
+        var reached = joined.text.length ? lastEnd / joined.text.length : 1;
+        var stopAt = -1;
+
+        if (real) {
+          // The words say exactly how far it got. A trailing stretch of
+          // sentences that no word landed in was never spoken - which catches
+          // a cut at any sentence boundary, where measuring a FRACTION of the
+          // run is blind to one that falls in the last fifth. A gap in the
+          // middle is not a cut: that is a voice being stingy with word
+          // events, and re-reading the paragraph over it would be worse than
+          // the silence being removed.
+          var tail = unspokenTail(spans.length, spoken);
+          if (tail >= 0) {
+            stopAt = tail;
+            // The sentence before the gap was probably cut part-way too - a
+            // cut rarely lands exactly on a full stop - and carrying on after
+            // it would lose the rest of it unread. One short word of slack,
+            // because re-reading a sentence costs far less than losing the
+            // end of one, and the run is already known to have been cut.
+            if (tail > 0 && shortOf(spans[tail - 1]) > 5) stopAt = tail - 1;
+          } else if (shortOf(last) > Math.max(12, (last.end - last.start) * 0.2)) {
+            // Words in every sentence, but they stopped well inside the final
+            // one. Here there is no other evidence of a cut, so it takes a
+            // clear shortfall: some voices never report their last word, and
+            // calling that a cut would re-read a sentence in every run.
+            stopAt = spans.length - 1;
+          }
+        } else if (startedAt &&
+                   (Date.now() - startedAt) < EARLY_END * estimateSpeechMs(joined.text, rate)) {
+          // A voice that reports no words leaves only the clock, and nothing
+          // says a paragraph in half the time it takes to read one. The clock
+          // cannot say WHERE it stopped, so the run is read again from the
+          // start; the budget halves every time this happens, so a voice that
+          // truncates stops being handed runs at all within a few tries.
+          stopAt = 0;
+        }
+
+        if (stopAt >= 0 && opts.ontruncated) {
+          return opts.ontruncated({
+            index: spans[stopAt].i,
+            reached: reached,
+            chars: lastEnd
+          });
+        }
+        if (opts.onend) opts.onend({ index: last.i, spoken: spans.length });
+      },
+      onerror: opts.onerror
     });
   }
 
@@ -521,6 +816,14 @@
 
   FR.speech = {
     speak: speak,
+    speakRun: speakRun,
+    planRun: planRun,
+    runSpans: runSpans,
+    spanAt: spanAt,
+    emitsBoundaries: emitsBoundaries,
+    isNetworkVoice: isNetworkVoice,
+    unspokenTail: unspokenTail,
+    estimateSpeechMs: estimateSpeechMs,
     cancel: cancel,
     pause: pause,
     resume: resume,
@@ -534,6 +837,9 @@
     splitForSpeech: splitForSpeech,
     supported: !!synth,
     RATE_MIN: RATE_MIN,
-    RATE_MAX: RATE_MAX
+    RATE_MAX: RATE_MAX,
+    RUN_CHARS: RUN_CHARS,
+    RUN_MIN_CHARS: RUN_MIN_CHARS,
+    RUN_SENTENCES: RUN_SENTENCES
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);

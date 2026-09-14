@@ -34,6 +34,12 @@ run_suite "Voice curation" "FR.voiceTests.run()" \
   "$root/src/content/speech.js" \
   "$here/voice.cases.js"
 
+run_suite "Gapless runs" "FR.gaplessTests.run()" \
+  "$here/jsc-stubs.js" \
+  "$root/src/lib/segmenter.js" \
+  "$root/src/content/speech.js" \
+  "$here/gapless.cases.js"
+
 run_suite "Service worker decisions" "FR.swTests.run()" \
   "$here/sw-stub.js" \
   "$root/src/lib/segmenter.js" \
