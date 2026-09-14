@@ -325,6 +325,47 @@
          blocks.length <= 4, true);
     })();
 
+    /* ---- matching rendered spans back to their text runs ---- */
+    (function () {
+      // A fake span: only .textContent matters to alignSpans.
+      function sp(t) { return { textContent: t }; }
+      function boxesFor(strs) { return strs.map(function (t) { return { str: t }; }); }
+
+      var runs = ['Alpha ', 'beta ', 'gamma', 'delta'];
+
+      var exact = boxesFor(runs);
+      eq('an exact 1:1 layer matches every span',
+         P.alignSpans(exact, runs.map(sp)), 4);
+      eq('and each run gets its own span',
+         exact.every(function (b, i) { return b.el.textContent === runs[i]; }), true);
+
+      // The case that broke on a real paper: the layer has one span MORE than
+      // the runs we kept, because a rotated figure label was filtered out.
+      var withExtra = boxesFor(runs);
+      var spansPlus = runs.map(sp);
+      spansPlus.splice(2, 0, sp('90deg label'));
+      eq('an unexpected extra span does not derail the rest',
+         P.alignSpans(withExtra, spansPlus), 4);
+      eq('the runs after the extra span are still matched correctly',
+         withExtra[3].el.textContent, 'delta');
+
+      // And one span FEWER than runs.
+      var withFewer = boxesFor(runs);
+      eq('a missing span leaves the others aligned',
+         P.alignSpans(withFewer, [sp('Alpha '), sp('gamma'), sp('delta')]), 3);
+      eq('the skipped run has no span', withFewer[1].el, undefined);
+      eq('later runs still line up', withFewer[2].el.textContent, 'gamma');
+
+      // Repeated text must not all collapse onto one run.
+      var repeated = boxesFor(['the', 'the', 'the']);
+      eq('repeated strings each claim a distinct run',
+         P.alignSpans(repeated, [sp('the'), sp('the'), sp('the')]), 3);
+      eq('and they are distinct span objects',
+         repeated[0].el !== repeated[1].el && repeated[1].el !== repeated[2].el, true);
+
+      eq('no spans matches nothing', P.alignSpans(boxesFor(runs), []), 0);
+    })();
+
     /* ---- headings ---- */
     (function () {
       var body = { text: 'and so the effect was robust across samples.', h: 10, left: 50, right: 550 };

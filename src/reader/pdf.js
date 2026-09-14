@@ -727,6 +727,35 @@
    * ------------------------------------------------------------------ */
 
   /**
+   * Attach each rendered span to the run it came from.
+   *
+   * pdf.js emits spans in run order and sets textContent to the run's string,
+   * so walking both in step and matching on text is reliable - and unlike a
+   * count comparison it survives the layer having a span more or fewer than
+   * expected. The lookahead is bounded so one unmatched span cannot throw the
+   * rest of the page out of alignment.
+   *
+   * @returns {number} how many spans were matched
+   */
+  function alignSpans(boxes, spans) {
+    var LOOKAHEAD = 12;
+    var next = 0, matched = 0;
+    for (var si = 0; si < spans.length; si++) {
+      var text = spans[si].textContent;
+      var limit = Math.min(boxes.length, next + LOOKAHEAD);
+      for (var k = next; k < limit; k++) {
+        if (boxes[k].el === undefined && boxes[k].str === text) {
+          boxes[k].el = spans[si];
+          next = k + 1;
+          matched++;
+          break;
+        }
+      }
+    }
+    return matched;
+  }
+
+  /**
    * @param {Element} layer         the .textLayer div, already rendered
    * @param {object} textContent    the SAME object the layer was built from
    * @param {object} viewport       unrotated viewport, for the page width
@@ -743,23 +772,30 @@
   function groupTextLayer(layer, textContent, viewport, opts) {
     opts = opts || {};
     var extracted = toBoxes(textContent);
-    var boxes = extracted.boxes.filter(function (b) { return !b.rotated; });
-    if (boxes.length < 2) return 0;
+    // Align against ALL runs, rotated ones included: pdf.js renders a span for
+    // every run, so dropping the rotated ones first threw the counts out by
+    // however many figure labels the page had. Rotated runs are excluded from
+    // the line grouping further down instead.
+    var allBoxes = extracted.boxes;
+    if (allBoxes.length < 2) return 0;
 
-    // pdf.js creates one span per non-empty item, in item order, plus <br>
-    // elements it marks as presentational.
     var spans = Array.prototype.filter.call(layer.children, function (el) {
       return el.tagName === 'SPAN' && el.textContent && el.textContent.length;
     });
-    if (spans.length !== boxes.length) {
-      // Rather than risk attaching the wrong span to the wrong line, leave the
-      // layer alone; reading falls back to line-by-line, which is correct if
-      // clumsy.
-      console.warn('[FocusRead] text layer has ' + spans.length + ' spans for ' +
-                   boxes.length + ' runs; not grouping');
+    if (!spans.length) return 0;
+
+    var matched = alignSpans(allBoxes, spans);
+    // Requiring an exact count was far too brittle - one stray span on a
+    // 470-run page disabled grouping for the whole page, and the reader was
+    // back to stopping at every line end.
+    if (matched < spans.length * 0.75) {
+      console.warn('[FocusRead] could only match ' + matched + ' of ' + spans.length +
+                   ' text-layer spans; not grouping');
       return 0;
     }
-    boxes.forEach(function (b, i) { b.el = spans[i]; });
+
+    var boxes = allBoxes.filter(function (b) { return b.el && !b.rotated; });
+    if (boxes.length < 2) return 0;
 
     var gutter = detectColumns(boxes, viewport.width);
     var lines = toLines(boxes, gutter);
@@ -859,6 +895,7 @@
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
       columnEdges: columnEdges,
+      alignSpans: alignSpans,
       endsSentence: endsSentence,
       mergeContinuations: mergeContinuations,
       edgeLines: edgeLines,
