@@ -12,16 +12,29 @@
       id: 'preview',
       getURL: function (p) { return '../../' + String(p).replace(/^\//, ''); },
       sendMessage: function (msg, cb) {
-        console.log('[preview] sendMessage', msg);
-        if (typeof cb === 'function') {
-          setTimeout(function () {
-            if (msg && msg.type === 'FR_STATUS_ACTIVE_TAB') {
-              cb({ url: 'https://arxiv.org/abs/2401.00001', injectable: true, title: 'A paper' });
-            } else {
-              cb({ ok: true });
+        console.log('[preview] sendMessage', msg && msg.type);
+        if (typeof cb !== 'function') return;
+        setTimeout(function () {
+          if (msg && msg.type === 'FR_STATUS_ACTIVE_TAB') {
+            return cb({ url: 'https://arxiv.org/abs/2401.00001', injectable: true, title: 'A paper' });
+          }
+          if (msg && msg.type === 'FR_TRANSLATE') {
+            // Stand in for a provider so bilingual mode, whole-page translation
+            // and the selection popup can be exercised without the network.
+            var texts = msg.texts || [];
+            if (g.__translateFail) {
+              return cb({ results: texts.map(function () {
+                return { ok: false, code: g.__translateFail, error: 'stubbed failure' };
+              }) });
             }
-          }, 0);
-        }
+            g.__translateCalls = (g.__translateCalls || 0) + 1;
+            g.__translatedCount = (g.__translatedCount || 0) + texts.length;
+            return cb({ results: texts.map(function (t) {
+              return { ok: true, text: '[zh] ' + String(t).slice(0, 40) };
+            }) });
+          }
+          cb({ ok: true });
+        }, 0);
       },
       openOptionsPage: function () { console.log('[preview] openOptionsPage'); }
     },
