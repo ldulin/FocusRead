@@ -23,7 +23,9 @@
     rendered: new Set(),
     controller: null,
     io: null,
-    followPage: 0        // until then, follow the sentence, not the top edge
+    followPage: 0,       // until then, follow the sentence, not the top edge
+    clickedLine: null,   // the line on the page image that was clicked
+    clickedAt: 0
   };
 
   /* ------------------------------------------------------------------ *
@@ -400,7 +402,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.2.5 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.2.6 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -883,7 +885,15 @@
       return attachController($('doc'), true).then(function (c) {
         // While the sentence is changing - reading, or stepping through - the
         // page image should track the sentence rather than the pane's top.
-        c.engine.on('current', function () { state.followPage = Date.now() + 1500; });
+        //
+        // Synced from here rather than waiting for the reading pane's scroll
+        // event: the pane does not always scroll. The sentence may already be
+        // on screen, or "follow along" may be off - and then the page image
+        // never heard about it at all.
+        c.engine.on('current', function () {
+          state.followPage = Date.now() + 1500;
+          syncPagesToReading();
+        });
         syncPagesToReading();          // start the two panes on the same page
         return c;
       });
@@ -1029,7 +1039,10 @@
       }
 
       var c = state.controller;
-      c.engine.setCurrent(idx, { scroll: true });
+      state.clickedLine = mark;
+      state.clickedAt = Date.now();
+      state.followPage = Date.now() + 1500;
+      c.engine.setCurrent(idx, { scroll: true });   // this syncs the image too
       c.ui.setState({ index: idx });
       // While it is reading, move the READING, not just the highlight. A
       // merged run would otherwise paint over this within a word - its next
@@ -1067,7 +1080,12 @@
   /** The page a reading-pane sentence came from, or 0. */
   function pageOfRecord(rec) {
     var el = rec && rec.blockEl;
-    var n = el && el.getAttribute ? Number(el.getAttribute('data-page')) : 0;
+    if (!el || !el.closest) return 0;
+    // The block usually carries it, but take an ancestor's if it does not:
+    // reading 0 here sends the whole sync down its "nobody is reading" path,
+    // which scrolls to the top of a page - the thing this exists to avoid.
+    var owner = el.getAttribute && el.getAttribute('data-page') ? el : el.closest('[data-page]');
+    var n = owner ? Number(owner.getAttribute('data-page')) : 0;
     return n > 0 ? n : 0;
   }
 
@@ -1149,6 +1167,20 @@
     // for: someone reading the last paragraph of page 2 gets sent back to the
     // start of page 2.
     if (Date.now() < state.followPage) {
+      // The line that was clicked ON the image, when that is what moved the
+      // reading pane. No matching needed and nothing to get wrong: it is the
+      // exact element the reader pointed at.
+      var line = state.clickedLine;
+      if (line && line.isConnected && Date.now() - state.clickedAt < 1500) {
+        var lr = line.getBoundingClientRect();
+        if (lr.height) {
+          centreBand(host, lr.top, lr.bottom);
+          var owner = line.closest('[data-page]');
+          if (owner) $('pageNum').value = owner.getAttribute('data-page');
+          return;
+        }
+      }
+
       var rec = currentRecord();
       var page = pageOfRecord(rec);
       var pageEl = page && pageElement(page);
@@ -1161,15 +1193,17 @@
           // not have been drawn yet - and the page is nowhere in sight, so its
           // top is the best that can be offered.
           scrollElementToTop(host, pageEl);
-        } else {
-          // The page is already on screen and there is nothing better to aim
-          // at, so aim at nothing. Scrolling to the top of a page the reader is
-          // part-way down is the exact move being complained about.
-          return;
         }
+        // Otherwise the page is already on screen with nothing better to aim
+        // at, so aim at nothing: scrolling to the top of a page the reader is
+        // part-way down is the exact move being complained about.
         $('pageNum').value = String(page);
         return;
       }
+      // Following a sentence but unable to place it at all. Leaving the image
+      // alone is the only safe move; falling through to the top-edge branch
+      // below would scroll it to the top of some page.
+      return;
     }
 
     // Nobody is reading: follow the reading pane's top edge, which is what
