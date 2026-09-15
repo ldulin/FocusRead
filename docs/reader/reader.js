@@ -23,7 +23,6 @@
     rendered: new Set(),
     controller: null,
     io: null,
-    holdPages: 0,        // do not move the page image before this time
     followPage: 0        // until then, follow the sentence, not the top edge
   };
 
@@ -401,7 +400,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.2.4 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.2.5 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -975,33 +974,6 @@
    * page rather than trying to align indices.
    * ------------------------------------------------------------------ */
 
-  function normaliseForMatch(text) {
-    return String(text || '')
-      .toLowerCase()
-      .replace(/[\u2010-\u2015-]\s+/g, '')       // rejoin "inter- national"
-      .replace(/[^a-z0-9\s]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  function tokenSet(text) {
-    var seen = Object.create(null);
-    normaliseForMatch(text).split(' ').forEach(function (t) {
-      if (t.length > 2) seen[t] = true;             // skip "a", "of", "the"
-    });
-    return seen;
-  }
-
-  /** Jaccard-ish overlap, biased towards covering the clicked text. */
-  function overlap(clickedTokens, candidate) {
-    var cand = tokenSet(candidate);
-    var keys = Object.keys(clickedTokens);
-    if (!keys.length) return 0;
-    var hit = 0;
-    keys.forEach(function (k) { if (cand[k]) hit++; });
-    return hit / keys.length;
-  }
-
   function pageOfNode(node) {
     var wrap = node && node.closest ? node.closest('[data-page]') : null;
     return wrap ? Number(wrap.getAttribute('data-page')) : null;
@@ -1015,7 +987,7 @@
   function findReadingSentence(text, page) {
     var c = state.controller;
     if (!c || !c.engine) return -1;
-    var clicked = tokenSet(text);
+    var clicked = FR.pdf.tokenSet(text);
     if (!Object.keys(clicked).length) return -1;
 
     var best = -1, bestScore = 0;
@@ -1027,7 +999,7 @@
         : null;
       if (page && recPage && Math.abs(recPage - page) > 1) return;
 
-      var score = overlap(clicked, rec.text);
+      var score = FR.pdf.overlap(clicked, rec.text);
       if (recPage === page) score += 0.05;          // tie-break towards the page
       if (score > bestScore) { bestScore = score; best = rec.i; }
     });
@@ -1057,9 +1029,6 @@
       }
 
       var c = state.controller;
-      // The reading pane is about to scroll, and that scroll must not drag the
-      // page image along with it: this line is where the reader is looking.
-      state.holdPages = Date.now() + 1500;
       c.engine.setCurrent(idx, { scroll: true });
       c.ui.setState({ index: idx });
       // While it is reading, move the READING, not just the highlight. A
@@ -1088,14 +1057,71 @@
     setTimeout(function () { el.classList.remove('fr-jumped', 'fr-nomatch'); }, 900);
   }
 
-  /** The page the sentence being read is on, or 0 if there is not one. */
-  function currentSentencePage() {
+  /** The sentence being read, or null. */
+  function currentRecord() {
     var c = state.controller;
-    if (!c || !c.engine || c.engine.index < 0) return 0;
-    var rec = c.engine.get(c.engine.index);
+    if (!c || !c.engine || c.engine.index < 0) return null;
+    return c.engine.get(c.engine.index) || null;
+  }
+
+  /** The page a reading-pane sentence came from, or 0. */
+  function pageOfRecord(rec) {
     var el = rec && rec.blockEl;
     var n = el && el.getAttribute ? Number(el.getAttribute('data-page')) : 0;
     return n > 0 ? n : 0;
+  }
+
+  function pageElement(page) {
+    var host = $('pages');
+    return host.querySelector('[data-page="' + page + '"]') ||
+           host.querySelector('[data-placeholder="' + page + '"]');
+  }
+
+  /**
+   * Where a reading-pane sentence sits ON the page image, in viewport
+   * coordinates, or null if the page has not been drawn yet.
+   *
+   * The two panes are separate engines with their own numbering and text that
+   * does not match character for character, so this matches on word overlap -
+   * the same way a click on the page image finds its sentence, in the other
+   * direction. Scored per LINE, and the other way round from a click: what
+   * fraction of this line's words are in the sentence. A line that straddles
+   * two sentences scores about a half and is left out, which is what keeps the
+   * extent to the sentence rather than the paragraph.
+   */
+  function regionForSentence(rec, pageEl) {
+    if (!rec || !pageEl) return null;
+    var lines = pageEl.querySelectorAll('.textLayer span');
+    if (!lines.length) return null;
+
+    var top = Infinity, bottom = -Infinity;
+    for (var i = 0; i < lines.length; i++) {
+      if (!FR.pdf.lineInSentence(lines[i].textContent, rec.text)) continue;
+      var r = lines[i].getBoundingClientRect();
+      if (!r.height) continue;
+      if (r.top < top) top = r.top;
+      if (r.bottom > bottom) bottom = r.bottom;
+    }
+    return bottom > top ? { top: top, bottom: bottom } : null;
+  }
+
+  /** Is any part of this element inside the pane's viewport? */
+  function partlyVisibleIn(host, el) {
+    var h = host.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return r.bottom > h.top && r.top < h.bottom;
+  }
+
+  /** Put an element's top near the pane's top, without trusting offsetParent. */
+  function scrollElementToTop(host, el) {
+    var h = host.getBoundingClientRect(), r = el.getBoundingClientRect();
+    host.scrollTo({ top: Math.max(0, r.top - h.top + host.scrollTop - 12), behavior: 'auto' });
+  }
+
+  /** Put a viewport-space band in the middle of a scrolling pane. */
+  function centreBand(host, top, bottom) {
+    var box = host.getBoundingClientRect();
+    var mid = (top + bottom) / 2 - box.top + host.scrollTop;
+    host.scrollTo({ top: Math.max(0, mid - host.clientHeight / 2), behavior: 'auto' });
   }
 
   /*
@@ -1115,16 +1141,45 @@
     if (state.mode !== 'split') return;
     var box = $('syncScroll');
     if (box && !box.checked) return;
-    if (Date.now() < state.holdPages) return;
-    var page = (Date.now() < state.followPage && currentSentencePage()) || pageAtTop($('doc'));
-    if (!page) return;
     var host = $('pages');
-    var target = host.querySelector('[data-page="' + page + '"]') ||
-                 host.querySelector('[data-placeholder="' + page + '"]');
+
+    // While the sentence is changing - reading it, clicking it in either pane -
+    // show THAT SENTENCE, wherever it sits on the page. Scrolling to the top of
+    // the page it happens to be on throws away the part that was being asked
+    // for: someone reading the last paragraph of page 2 gets sent back to the
+    // start of page 2.
+    if (Date.now() < state.followPage) {
+      var rec = currentRecord();
+      var page = pageOfRecord(rec);
+      var pageEl = page && pageElement(page);
+      if (pageEl) {
+        var band = regionForSentence(rec, pageEl);
+        if (band) {
+          centreBand(host, band.top, band.bottom);
+        } else if (!partlyVisibleIn(host, pageEl)) {
+          // Where the sentence sits is not known - the page's text layer may
+          // not have been drawn yet - and the page is nowhere in sight, so its
+          // top is the best that can be offered.
+          scrollElementToTop(host, pageEl);
+        } else {
+          // The page is already on screen and there is nothing better to aim
+          // at, so aim at nothing. Scrolling to the top of a page the reader is
+          // part-way down is the exact move being complained about.
+          return;
+        }
+        $('pageNum').value = String(page);
+        return;
+      }
+    }
+
+    // Nobody is reading: follow the reading pane's top edge, which is what
+    // keeping the two in step means while free scrolling.
+    var atTop = pageAtTop($('doc'));
+    if (!atTop) return;
+    var target = pageElement(atTop);
     if (!target) return;
-    // offsetTop is relative to the scrolling pane, so no viewport maths.
-    host.scrollTo({ top: Math.max(0, target.offsetTop - 12), behavior: 'auto' });
-    $('pageNum').value = String(page);
+    scrollElementToTop(host, target);
+    $('pageNum').value = String(atTop);
   }
 
   /** Which source page is at the top of a scrolling pane? */

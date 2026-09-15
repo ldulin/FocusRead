@@ -434,6 +434,41 @@
       eq('empty boxes produce no lines', P.toLines([], null), []);
     })();
 
+    lines.push('\n--- matching a sentence against the lines of a page image ---');
+    (function () {
+      var P = FR.pdf;
+      // Real text from a paper: the sentence being read, and lines as the page
+      // image breaks them - which is not where the sentences break.
+      var S = 'This matters for a resource paper: it means the procedures reported ' +
+              'here can be applied to network estimates from other laboratories, in ' +
+              'other participants, without reimplementation.';
+
+      eq('a line wholly inside the sentence belongs to it',
+         P.lineInSentence('procedures reported here can be applied to network', S), true);
+      eq('so does the line that finishes it',
+         P.lineInSentence('other participants, without reimplementation.', S), true);
+      eq('a line that straddles the sentence before it does not',
+         P.lineInSentence('parcel outlines as Connectome Workbench border files. This matters for a', S), false);
+      eq('nor does a line of the next paragraph',
+         P.lineInSentence('Uploaded maps are processed in temporary storage and purged', S), false);
+      eq('nor a heading', P.lineInSentence('Discussion', S), false);
+      eq('nor a page number', P.lineInSentence('7', S), false);
+      eq('nor an empty line', P.lineInSentence('   ', S), false);
+      eq('nor nothing at all', P.lineInSentence(null, S), false);
+
+      // Hyphenation survives the rejoin: the image keeps "inter- national",
+      // the reflowed sentence has "international".
+      eq('a hyphen broken across the line still matches',
+         P.lineInSentence('variation observed in these data', 'The inter- national variation observed in these data is small.'), true);
+
+      eq('word overlap ignores punctuation and case',
+         P.overlap(P.tokenSet('Gordon et al. (2016)'), 'gordon et al 2016 derived areal boundaries'), 1);
+      eq('words of one or two letters are dropped',
+         Object.keys(P.tokenSet('a of an to is it')).length, 0);
+      eq('longer ones are kept, lowercased',
+         Object.keys(P.tokenSet('The And Gordon')).sort(), ['and', 'gordon', 'the']);
+    })();
+
     return {
       pass: pass, fail: fail,
       report: lines.join('\n') + '\n\n==== ' + pass + ' passed, ' + fail + ' failed ===='

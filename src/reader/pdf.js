@@ -931,7 +931,62 @@
     return groups;
   }
 
+  /* ------------------------------------------------------------------ *
+   * Matching reading-view text against the text on a page image
+   *
+   * The reflowed view and the page image are two different renderings of the
+   * same words and do not match character for character: the image keeps the
+   * hyphenation the reflow rejoins, and its lines break in different places.
+   * So both directions - a click on the image finding its sentence, and a
+   * sentence finding where it sits on the image - match on word overlap.
+   * ------------------------------------------------------------------ */
+
+  function normaliseForMatch(text) {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[\u2010-\u2015-]\s+/g, '')       // rejoin "inter- national"
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function tokenSet(text) {
+    var seen = Object.create(null);
+    normaliseForMatch(text).split(' ').forEach(function (t) {
+      if (t.length > 2) seen[t] = true;             // skip "a", "of", "the"
+    });
+    return seen;
+  }
+
+  /** Jaccard-ish overlap, biased towards covering the clicked text. */
+  function overlap(clickedTokens, candidate) {
+    var cand = tokenSet(candidate);
+    var keys = Object.keys(clickedTokens);
+    if (!keys.length) return 0;
+    var hit = 0;
+    keys.forEach(function (k) { if (cand[k]) hit++; });
+    return hit / keys.length;
+  }
+
+  /**
+   * Does this line of a page image belong to this sentence?
+   *
+   * Scored the opposite way round from a click: what fraction of the LINE's
+   * words are in the sentence. A line that straddles two sentences scores
+   * about a half and is left out, which is what keeps "where is this sentence"
+   * to the sentence rather than growing to the whole paragraph.
+   */
+  function lineInSentence(lineText, sentenceText) {
+    var text = String(lineText || '');
+    if (text.trim().length < 4) return false;
+    return overlap(tokenSet(text), sentenceText) >= 0.7;
+  }
+
   FR.pdf = {
+    normaliseForMatch: normaliseForMatch,
+    tokenSet: tokenSet,
+    overlap: overlap,
+    lineInSentence: lineInSentence,
     pdfPaths: pdfPaths,
     open: open,
     extractReflow: extractReflow,
