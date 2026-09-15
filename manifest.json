@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FocusRead",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Read papers sentence by sentence: click any sentence to hear it, dim the rest to stay focused, and translate a word, a sentence, or the whole page.",
   "minimum_chrome_version": "116",
   "icons": {

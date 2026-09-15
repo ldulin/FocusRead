@@ -117,7 +117,7 @@
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
 <script src="../../src/lib/settings.js?v=1789416460"></script>
 <script src="../../src/lib/translate.js?v=1789357531"></script>
-<script src="../../src/content/speech.js?v=1789412736"></script>
+<script src="../../src/content/speech.js?v=1789431101"></script>
 <script src="../../src/content/engine.js?v=1789366280"></script>
 
 <script>
@@ -361,6 +361,32 @@
        chunksC.every(function (c) { return !/[\uD800-\uDBFF]$/.test(c); }), true);
 
     eq('short text is returned untouched', FR.translate.byteChunks('Short.', 480), ['Short.']);
+
+    section('speech - the voice list is never cached for good');
+
+    // Edge registers its "Online (Natural)" voices after the local ones. A
+    // list captured on the first read is missing exactly the voice a reader is
+    // most likely to have picked - and everything decided from it, including
+    // whether to read a paragraph in one breath, is then about a voice that
+    // was never going to speak.
+    var realVoices = window.__fake.getVoices;
+    var LOCAL_ONLY = [{ voiceURI: 'local-en', name: 'Local EN', lang: 'en-US', localService: true }];
+    var WITH_NET = LOCAL_ONLY.concat([
+      { voiceURI: 'net-en', name: 'Net Online (Natural)', lang: 'en-US', localService: false }
+    ]);
+
+    window.__fake.getVoices = function () { return LOCAL_ONLY; };
+    var earlyList = await FR.speech.getVoices();
+    window.__fake.getVoices = function () { return WITH_NET; };
+    var laterList = await FR.speech.getVoices();
+    var sync = FR.speech.voicesNow();
+    window.__fake.getVoices = realVoices;
+
+    eq('an early read sees only what has registered so far', earlyList.length, 1);
+    eq('a later read sees the voices that arrived after it', laterList.length, 2);
+    eq('so a network voice registered late is not invisible',
+       laterList.filter(function (v) { return !v.localService; }).length, 1);
+    eq('and it can be read without waiting', sync.length, 2);
 
     /* ================= gapless runs ================= */
     section('speech - a run of sentences in one utterance');

@@ -73,10 +73,11 @@
     this._rulerRaf = null;
     this._playGeneration = 0;    // invalidates in-flight auto-advance chains
     this._bilingualGen = 0;      // invalidates in-flight translation batches
-    this._voice = null;          // the voice settings currently resolve to
     this._runChars = {};         // voiceURI -> how much it will swallow at once
     this._runUsed = null;        // the budget the run in flight was planned with
     this._toldAboutRuns = false;
+    this._noMerge = '';          // why this sentence is being spoken on its own
+    this._toldWhyGaps = false;
   }
 
   /* ------------------------------------------------------------------ *
@@ -208,27 +209,28 @@
     if (this.ui) {
       this.ui.setState({ rate: s.rate, focus: s.focusMode, bilingual: s.bilingual });
     }
-    this._resolveVoice();
   };
 
   /**
-   * Work out which voice the current settings actually resolve to, and keep it.
-   * Gapless reading only applies to network voices, and `speak` resolves the
-   * voice too late and too deep to ask there.
+   * Which voice the current settings resolve to, worked out now rather than
+   * remembered.
+   *
+   * It has to be the same answer `speak` will reach moments later, and a copy
+   * taken when the reader started is not: the engine registers network voices
+   * after the local ones, so an early answer names a voice that was never
+   * going to speak - and the run policy is then decided about the wrong voice,
+   * silently, for the rest of the document.
    */
-  Controller.prototype._resolveVoice = function () {
-    var self = this;
-    FR.speech.getVoices().then(function (voices) {
-      var s = self.settings;
-      if (!s) return;
-      self._voice = FR.speech.pickVoice(
-        voices, s.voiceURI, self.docLang(), s.localVoicesOnly !== false) || null;
-    }, function () { /* no voices, no gapless */ });
+  Controller.prototype._activeVoice = function () {
+    var s = this.settings;
+    if (!s) return null;
+    return FR.speech.pickVoice(
+      FR.speech.voicesNow(), s.voiceURI, this.docLang(), s.localVoicesOnly !== false) || null;
   };
 
-  Controller.prototype._voiceKey = function () {
-    var v = this._voice;
-    return v ? String(v.voiceURI || v.name) : '';
+  Controller.prototype._voiceKey = function (v) {
+    var voice = v === undefined ? this._activeVoice() : v;
+    return voice ? String(voice.voiceURI || voice.name) : '';
   };
 
   /**
@@ -279,37 +281,47 @@
     var rec = eng.get(i);
     var single = [{ i: i, text: rec ? rec.text : '' }];
 
-    if (s.gaplessMode === 'off') return single;
+    this._noMerge = '';
+    if (s.gaplessMode === 'off') { this._noMerge = 'smooth reading is switched off'; return single; }
     // Each of these wants a real break between sentences, or needs to act
     // between them, which a single utterance cannot be interrupted for.
     // Clause mode is NOT among them: it makes the units shorter still, so the
     // gap between them is where a network voice sounds worst.
-    if (!s.autoAdvance || s.speakTranslation) return single;
-    if (Number(s.pauseBetween) > 0) return single;
+    if (!s.autoAdvance) { this._noMerge = '"keep reading" is off'; return single; }
+    if (s.speakTranslation) { this._noMerge = 'the translation is read after each sentence'; return single; }
+    if (Number(s.pauseBetween) > 0) {
+      this._noMerge = 'a pause between sentences is set in Settings';
+      return single;
+    }
 
-    var v = this._voice;
-    if (!v) return single;
-    // _resolveVoice is asynchronous, so just after a voice change this still
-    // holds the previous one. Plan for one sentence rather than apply the old
-    // voice's policy to the new voice.
-    if (s.voiceURI && v.voiceURI !== s.voiceURI) return single;
-    if (s.gaplessMode !== 'always' && !FR.speech.isNetworkVoice(v)) return single;
+    var v = this._activeVoice();
+    if (!v) { this._noMerge = 'no voice is available yet'; return single; }
+    if (s.gaplessMode !== 'always' && !FR.speech.isNetworkVoice(v)) {
+      this._noMerge = '';                 // an on-device voice has no gap to remove
+      return single;
+    }
 
-    var key = this._voiceKey();
+    var key = this._voiceKey(v);
     var words = FR.speech.emitsBoundaries(key);
-    // Asking for it explicitly overrides this: without word reports the
-    // sentence highlight falls back to an estimated cadence, which is already
-    // what such a voice gets today - just now spread over a run, where the
-    // guess has longer to drift. That is a trade worth offering, not making.
-    if (s.gaplessMode !== 'always' && words !== true) return single;
+    // Not known yet: speak one sentence on its own to find out whether this
+    // voice reports word positions, then decide with the answer in hand.
+    if (words === undefined && s.gaplessMode !== 'always') {
+      this._noMerge = '';
+      return single;
+    }
 
     var budget = this._runBudget(key);
     // A voice that reports no words leaves the highlight riding a guessed
-    // reading speed for the whole utterance, with nothing to re-sync it until
-    // the next one starts. Keep those runs to the shortest that is still worth
-    // merging, so the guess has less room to drift away from the audio.
+    // reading speed, with nothing to re-sync it until the next utterance
+    // starts. That is a reason to keep its runs to the shortest still worth
+    // merging - not a reason to leave a hole at every full stop, which is the
+    // thing the reader actually complains about.
     if (words === false) budget = Math.min(budget, FR.speech.RUN_MIN_CHARS);
-    if (budget < FR.speech.RUN_MIN_CHARS) return single;
+    if (budget < FR.speech.RUN_MIN_CHARS) {
+      this._noMerge = 'this voice cuts long stretches off';
+      return single;
+    }
+    this._noMerge = '';
 
     this._runUsed = budget;
     return FR.speech.planRun(eng.sentences, i, { budget: budget });
@@ -385,6 +397,13 @@
     // A network voice reads a whole run of sentences in one breath; see
     // _planRun. Everything else keeps the one-utterance-per-sentence path.
     var run = this._planRun();
+    // A network voice left reading one sentence at a time has a hole at every
+    // full stop, and nothing on screen said why. Say it once.
+    if (run.length === 1 && this._noMerge && !this._toldWhyGaps) {
+      this._toldWhyGaps = true;
+      this.ui.toast('Reading one sentence at a time, so this voice will pause ' +
+                    'between them: ' + this._noMerge + '.', 5000);
+    }
     if (run.length > 1) {
       var key = this._voiceKey();
       FR.speech.speakRun(run, Object.assign({}, common, {

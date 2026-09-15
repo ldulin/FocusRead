@@ -56,8 +56,26 @@
 
   var voicesPromise = null;
 
+  /** The voices the engine has RIGHT NOW, without waiting. */
+  function voicesNow() {
+    if (!synth) return [];
+    try { return synth.getVoices() || []; } catch (e) { return []; }
+  }
+
+  /*
+   * Never cache the list for good.
+   *
+   * Edge registers its "Online (Natural)" voices after the local ones, so the
+   * first call comes back with a non-empty list that is missing precisely the
+   * voices someone is most likely to have chosen - and it never fires again
+   * for a listener that asked for one shot. Every later decision is then made
+   * about the wrong voice: which voice is speaking, and whether it is the kind
+   * that needs a paragraph read in one breath.
+   */
   function getVoices() {
     if (!synth) return Promise.resolve([]);
+    var now = voicesNow();
+    if (now.length) return Promise.resolve(now);
     if (voicesPromise) return voicesPromise;
     voicesPromise = new Promise(function (resolve) {
       var list = synth.getVoices();
@@ -829,6 +847,7 @@
     resume: resume,
     state: state,
     getVoices: getVoices,
+    voicesNow: voicesNow,
     pickVoice: pickVoice,
     curateVoices: curateVoices,
     voiceGroups: voiceGroups,
