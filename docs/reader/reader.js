@@ -23,7 +23,6 @@
     rendered: new Set(),
     controller: null,
     io: null,
-    followPage: 0,       // until then, follow the sentence, not the top edge
     clickedLine: null,   // the line on the page image that was clicked
     clickedAt: 0
   };
@@ -402,7 +401,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.2.6 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.2.7 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -880,7 +879,6 @@
       $('doc').hidden = false;
       $('pages').hidden = false;
       hideStatus();
-      wireScrollSync();
       wireOriginalClicks();
       return attachController($('doc'), true).then(function (c) {
         // While the sentence is changing - reading, or stepping through - the
@@ -890,10 +888,7 @@
         // event: the pane does not always scroll. The sentence may already be
         // on screen, or "follow along" may be off - and then the page image
         // never heard about it at all.
-        c.engine.on('current', function () {
-          state.followPage = Date.now() + 1500;
-          syncPagesToReading();
-        });
+        c.engine.on('current', function () { syncPagesToReading(); });
         syncPagesToReading();          // start the two panes on the same page
         return c;
       });
@@ -926,7 +921,7 @@
 
   function activeContainer() {
     // In split view the reflowed text is the one being read, so page
-    // navigation targets it and the image pane follows via the scroll sync.
+    // navigation targets it; goToPage moves the image pane itself.
     return state.mode === 'original' ? $('pages') : $('doc');
   }
 
@@ -945,33 +940,17 @@
         block: 'start'
       });
     }
+    // Asking for a page is the one time a page's top IS what was asked for, so
+    // in split view take the image there too: nothing else moves it now.
+    if (state.mode === 'split') {
+      var pageEl = pageElement(n);
+      if (pageEl) pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }
   }
 
   function prefersReducedMotion() {
     try { return root.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     catch (e) { return false; }
-  }
-
-  /**
-   * In split view, follow the reading side with the page image.
-   *
-   * One-directional on purpose: the text is what you read, so it drives. A
-   * two-way sync fights itself as each pane's smooth scroll retriggers the
-   * other.
-   */
-  var syncWired = false;
-  var syncTimer = null;
-
-  function wireScrollSync() {
-    if (syncWired) return;
-    syncWired = true;
-    var docEl = $('doc');
-    docEl.addEventListener('scroll', function () {
-      if (state.mode !== 'split') return;
-      if (!$('syncScroll').checked) return;
-      clearTimeout(syncTimer);
-      syncTimer = setTimeout(syncPagesToReading, 90);
-    }, { passive: true });
   }
 
   /* ------------------------------------------------------------------ *
@@ -1041,7 +1020,6 @@
       var c = state.controller;
       state.clickedLine = mark;
       state.clickedAt = Date.now();
-      state.followPage = Date.now() + 1500;
       c.engine.setCurrent(idx, { scroll: true });   // this syncs the image too
       c.ui.setState({ index: idx });
       // While it is reading, move the READING, not just the highlight. A
@@ -1123,18 +1101,6 @@
     return bottom > top ? { top: top, bottom: bottom } : null;
   }
 
-  /** Is any part of this element inside the pane's viewport? */
-  function partlyVisibleIn(host, el) {
-    var h = host.getBoundingClientRect(), r = el.getBoundingClientRect();
-    return r.bottom > h.top && r.top < h.bottom;
-  }
-
-  /** Put an element's top near the pane's top, without trusting offsetParent. */
-  function scrollElementToTop(host, el) {
-    var h = host.getBoundingClientRect(), r = el.getBoundingClientRect();
-    host.scrollTo({ top: Math.max(0, r.top - h.top + host.scrollTop - 12), behavior: 'auto' });
-  }
-
   /** Put a viewport-space band in the middle of a scrolling pane. */
   function centreBand(host, top, bottom) {
     var box = host.getBoundingClientRect();
@@ -1142,18 +1108,15 @@
     host.scrollTo({ top: Math.max(0, mid - host.clientHeight / 2), behavior: 'auto' });
   }
 
-  /*
-   * Keep the page image in step with the reading pane.
+  /**
+   * Show the sentence being read on the page image, centred.
    *
-   * Two things this must NOT do, both of which moved the page out from under
-   * the reader:
-   *
-   *  - Move at all just after a click on the page image. That click scrolls
-   *    the reading pane, the reading pane's scroll event lands here, and the
-   *    page image is then scrolled away from the very line that was clicked.
-   *  - Follow the pane's top EDGE while reading. The sentence being read sits
-   *    in the middle of the pane, so the top edge is usually the page before
-   *    it - and the image jumps back a page in the middle of a paragraph.
+   * Driven by the SENTENCE changing and by nothing else. Scrolling the reading
+   * pane deliberately does not move the image: a scroll can only say which
+   * page is under the pane's top edge, so acting on it means scrolling the
+   * image to the top of a page - throwing away the part of the page that was
+   * being read. Reading the text and looking at the page are separate
+   * activities; choosing a sentence is the only thing that joins them.
    */
   function syncPagesToReading() {
     if (state.mode !== 'split') return;
@@ -1161,73 +1124,31 @@
     if (box && !box.checked) return;
     var host = $('pages');
 
-    // While the sentence is changing - reading it, clicking it in either pane -
-    // show THAT SENTENCE, wherever it sits on the page. Scrolling to the top of
-    // the page it happens to be on throws away the part that was being asked
-    // for: someone reading the last paragraph of page 2 gets sent back to the
-    // start of page 2.
-    if (Date.now() < state.followPage) {
-      // The line that was clicked ON the image, when that is what moved the
-      // reading pane. No matching needed and nothing to get wrong: it is the
-      // exact element the reader pointed at.
-      var line = state.clickedLine;
-      if (line && line.isConnected && Date.now() - state.clickedAt < 1500) {
-        var lr = line.getBoundingClientRect();
-        if (lr.height) {
-          centreBand(host, lr.top, lr.bottom);
-          var owner = line.closest('[data-page]');
-          if (owner) $('pageNum').value = owner.getAttribute('data-page');
-          return;
-        }
-      }
-
-      var rec = currentRecord();
-      var page = pageOfRecord(rec);
-      var pageEl = page && pageElement(page);
-      if (pageEl) {
-        var band = regionForSentence(rec, pageEl);
-        if (band) {
-          centreBand(host, band.top, band.bottom);
-        } else if (!partlyVisibleIn(host, pageEl)) {
-          // Where the sentence sits is not known - the page's text layer may
-          // not have been drawn yet - and the page is nowhere in sight, so its
-          // top is the best that can be offered.
-          scrollElementToTop(host, pageEl);
-        }
-        // Otherwise the page is already on screen with nothing better to aim
-        // at, so aim at nothing: scrolling to the top of a page the reader is
-        // part-way down is the exact move being complained about.
-        $('pageNum').value = String(page);
+    // The line that was clicked ON the image, when that is what moved the
+    // reading pane. No matching needed and nothing to get wrong: it is the
+    // exact element the reader pointed at.
+    var line = state.clickedLine;
+    if (line && line.isConnected && Date.now() - state.clickedAt < 1500) {
+      var lr = line.getBoundingClientRect();
+      if (lr.height) {
+        centreBand(host, lr.top, lr.bottom);
+        var owner = line.closest('[data-page]');
+        if (owner) $('pageNum').value = owner.getAttribute('data-page');
         return;
       }
-      // Following a sentence but unable to place it at all. Leaving the image
-      // alone is the only safe move; falling through to the top-edge branch
-      // below would scroll it to the top of some page.
-      return;
     }
 
-    // Nobody is reading: follow the reading pane's top edge, which is what
-    // keeping the two in step means while free scrolling.
-    var atTop = pageAtTop($('doc'));
-    if (!atTop) return;
-    var target = pageElement(atTop);
-    if (!target) return;
-    scrollElementToTop(host, target);
-    $('pageNum').value = String(atTop);
-  }
+    var rec = currentRecord();
+    var page = pageOfRecord(rec);
+    var pageEl = page && pageElement(page);
+    if (!pageEl) return;
 
-  /** Which source page is at the top of a scrolling pane? */
-  function pageAtTop(pane) {
-    var nodes = pane.querySelectorAll('[data-page]');
-    var paneTop = pane.getBoundingClientRect().top;
-    var best = null;
-    for (var i = 0; i < nodes.length; i++) {
-      var r = nodes[i].getBoundingClientRect();
-      if (r.bottom < paneTop) { best = nodes[i]; continue; }
-      if (r.top <= paneTop + 80) best = nodes[i];
-      else break;
-    }
-    return best ? Number(best.getAttribute('data-page')) : null;
+    var band = regionForSentence(rec, pageEl);
+    if (band) centreBand(host, band.top, band.bottom);
+    // Otherwise the sentence cannot be placed on the page - its text layer may
+    // not have been drawn yet - so nothing moves. Showing the top of the page
+    // instead is the jump this exists to prevent.
+    $('pageNum').value = String(page);
   }
 
   var pagerTimer = null;
