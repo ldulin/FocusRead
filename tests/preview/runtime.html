@@ -604,6 +604,38 @@
     eq('and it ends cleanly', ro.ev.end, [7]);
     eq('reaching the last word is not truncation', ro.ev.truncated, []);
 
+    section('speech - a long sentence is still one utterance');
+
+    // The 200-character splitter (quirk 1) is what a merged run exists to
+    // avoid: a network voice fetches every piece separately, so splitting the
+    // LONGEST sentences - the ones that most need to flow - put a hole in the
+    // middle of each. A run of one has to be exempt too, or a sentence too
+    // long to share a run with anything is exactly the one that breaks.
+    var LONG_ONE = [{ i: 50, text:
+      'Although the estimator remains unbiased under the stated assumptions, the ' +
+      'variance of the resulting statistic grows with the number of nested ' +
+      'resampling folds, and we therefore report both the analytic approximation ' +
+      'and an empirical bootstrap interval for every condition in the study.' }];
+    var rlong = runRecorder();
+    rlong.opts.maxChars = 200;              // ignored by speakRun, on purpose
+    var lgp = FR.speech.speakRun(LONG_ONE, rlong.opts);
+    await sleep(90);
+    eq('a 300-character sentence is not cut into pieces', window.__fake._queue.length, 1);
+    eq('and it is queued whole',
+       window.__fake._queue[0].text.length, LONG_ONE[0].text.length);
+    // Word by word, the way an engine actually reports them: a single event
+    // that jumped most of the sentence would be rejected as a stray offset,
+    // and rightly so.
+    var walked = [], at = 0, wordRe = /\S+/g, mw;
+    while ((mw = wordRe.exec(LONG_ONE[0].text)) !== null) {
+      walked.push({ charIndex: mw.index, charLength: mw[0].length });
+      at = mw.index;
+    }
+    window.__drive({ boundaries: walked });
+    await lgp.catch(function () {});
+    await sleep(20);
+    eq('and it still reports as finished', rlong.ev.end, [50]);
+
     eq('an empty run ends immediately rather than hanging',
        (await (function () {
           var e = [];

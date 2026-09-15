@@ -77,6 +77,7 @@
     this._runUsed = null;        // the budget the run in flight was planned with
     this._toldAboutRuns = false;
     this._noMerge = '';          // why this sentence is being spoken on its own
+    this._merging = false;       // is this voice being smoothed at all?
     this._toldWhyGaps = false;
   }
 
@@ -282,6 +283,7 @@
     var single = [{ i: i, text: rec ? rec.text : '' }];
 
     this._noMerge = '';
+    this._merging = false;
     if (s.gaplessMode === 'off') { this._noMerge = 'smooth reading is switched off'; return single; }
     // Each of these wants a real break between sentences, or needs to act
     // between them, which a single utterance cannot be interrupted for.
@@ -323,6 +325,13 @@
     }
     this._noMerge = '';
 
+    // From here this voice IS being smoothed, whether or not a second sentence
+    // fits. That matters most for the sentence too long to share a run with
+    // anything: spoken through the ordinary path it would be cut into 200
+    // character pieces (speech.js quirk 1) and a network voice fetches each
+    // piece separately, so the longest sentences - the ones that most need to
+    // flow - were the ones broken in the middle.
+    this._merging = true;
     this._runUsed = budget;
     return FR.speech.planRun(eng.sentences, i, { budget: budget });
   };
@@ -399,12 +408,12 @@
     var run = this._planRun();
     // A network voice left reading one sentence at a time has a hole at every
     // full stop, and nothing on screen said why. Say it once.
-    if (run.length === 1 && this._noMerge && !this._toldWhyGaps) {
+    if (!this._merging && this._noMerge && !this._toldWhyGaps) {
       this._toldWhyGaps = true;
       this.ui.toast('Reading one sentence at a time, so this voice will pause ' +
                     'between them: ' + this._noMerge + '.', 5000);
     }
-    if (run.length > 1) {
+    if (this._merging) {
       var key = this._voiceKey();
       FR.speech.speakRun(run, Object.assign({}, common, {
         onsentence: function (i) {
