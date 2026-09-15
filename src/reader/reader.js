@@ -22,7 +22,9 @@
     heads: null,
     rendered: new Set(),
     controller: null,
-    io: null
+    io: null,
+    holdPages: 0,        // do not move the page image before this time
+    followPage: 0        // until then, follow the sentence, not the top edge
   };
 
   /* ------------------------------------------------------------------ *
@@ -399,7 +401,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.2.3 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.2.4 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -880,6 +882,9 @@
       wireScrollSync();
       wireOriginalClicks();
       return attachController($('doc'), true).then(function (c) {
+        // While the sentence is changing - reading, or stepping through - the
+        // page image should track the sentence rather than the pane's top.
+        c.engine.on('current', function () { state.followPage = Date.now() + 1500; });
         syncPagesToReading();          // start the two panes on the same page
         return c;
       });
@@ -1052,6 +1057,9 @@
       }
 
       var c = state.controller;
+      // The reading pane is about to scroll, and that scroll must not drag the
+      // page image along with it: this line is where the reader is looking.
+      state.holdPages = Date.now() + 1500;
       c.engine.setCurrent(idx, { scroll: true });
       c.ui.setState({ index: idx });
       // While it is reading, move the READING, not just the highlight. A
@@ -1080,11 +1088,35 @@
     setTimeout(function () { el.classList.remove('fr-jumped', 'fr-nomatch'); }, 900);
   }
 
+  /** The page the sentence being read is on, or 0 if there is not one. */
+  function currentSentencePage() {
+    var c = state.controller;
+    if (!c || !c.engine || c.engine.index < 0) return 0;
+    var rec = c.engine.get(c.engine.index);
+    var el = rec && rec.blockEl;
+    var n = el && el.getAttribute ? Number(el.getAttribute('data-page')) : 0;
+    return n > 0 ? n : 0;
+  }
+
+  /*
+   * Keep the page image in step with the reading pane.
+   *
+   * Two things this must NOT do, both of which moved the page out from under
+   * the reader:
+   *
+   *  - Move at all just after a click on the page image. That click scrolls
+   *    the reading pane, the reading pane's scroll event lands here, and the
+   *    page image is then scrolled away from the very line that was clicked.
+   *  - Follow the pane's top EDGE while reading. The sentence being read sits
+   *    in the middle of the pane, so the top edge is usually the page before
+   *    it - and the image jumps back a page in the middle of a paragraph.
+   */
   function syncPagesToReading() {
     if (state.mode !== 'split') return;
     var box = $('syncScroll');
     if (box && !box.checked) return;
-    var page = pageAtTop($('doc'));
+    if (Date.now() < state.holdPages) return;
+    var page = (Date.now() < state.followPage && currentSentencePage()) || pageAtTop($('doc'));
     if (!page) return;
     var host = $('pages');
     var target = host.querySelector('[data-page="' + page + '"]') ||
