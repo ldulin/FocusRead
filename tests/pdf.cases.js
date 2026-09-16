@@ -334,6 +334,37 @@
          P.isHeadingLine(big('Results', 360), 8.22,
                          { rightEdge: EDGE, prev: { text: 'body text', h: 8.2, left: 320, right: 558, y: 610, col: 0 } }),
          true);
+      /* ---- a title wrapped over three lines is ONE heading ----
+       * Measured from the same paper: three lines of 25.9pt display type,
+       * 27.9pt apart, against a body gap of about 10pt. Each line is a heading
+       * on its own and a heading breaks the block either side of it, so the
+       * title arrived as three reading units - "A single computational
+       * objective can", "produce specialization of streams in", "visual
+       * cortex" - and clicking it read a third of a title.
+       */
+      (function () {
+        function tl(t, y) { return { text: t, h: 25.9, left: 40, right: 476, y: y, col: 0 }; }
+        var body = function (t, y) { return { text: t, h: 8.22, left: 40, right: 558, y: y, col: 0 }; };
+        var blocks = P.linesToBlocks([
+          tl('A single computational objective can', 657),
+          tl('produce specialization of streams in', 629.1),
+          tl('visual cortex', 601.2),
+          body('Received: 19 April 2026', 554.6),
+          body('and the paragraph that follows it continues here', 544.6)
+        ], 8.22, true);
+        eq('the three title lines are one block', blocks[0].text,
+           'A single computational objective can produce specialization of streams in visual cortex');
+        eq('and it is still a heading', blocks[0].type, 'h');
+        eq('what follows it is not swallowed', blocks[1].type, 'p');
+
+        // Two headings of the same size that are far apart stay apart.
+        var far = P.linesToBlocks([
+          tl('First display heading', 657),
+          tl('A second one much further down', 400)
+        ], 8.22, true);
+        eq('display lines far apart are separate headings', far.length, 2);
+      })();
+
       eq('with no measure to judge by, larger type is still a heading',
          P.isHeadingLine(big('units to respond similarly, better captures brain', 558), 8.22), true);
 

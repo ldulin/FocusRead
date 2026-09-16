@@ -519,6 +519,30 @@
   }
 
   /**
+   * Are these two heading lines one heading, wrapped?
+   *
+   * A paper's title runs to two or three lines of display type. Each line is a
+   * heading by itself, and a heading breaks the block before and after it - so
+   * a wrapped title came out as one block per line: "A single computational
+   * objective can", "produce specialization of streams in", "visual cortex".
+   *
+   * Same column, same size, and close enough together to be consecutive lines
+   * of one setting.
+   *
+   * The gap is measured against the LINE's own height and nothing else.
+   * Display type is leaded in proportion to itself - 27.9pt for a 25.9pt
+   * title - so the body's line spacing is the wrong yardstick; and taking the
+   * page's median gap as a fallback made the test meaningless on a page whose
+   * median gap is itself large, merging two headings a third of a page apart.
+   */
+  function sameHeadingRun(prev, ln) {
+    if (!prev || !ln) return false;
+    if (prev.col !== ln.col) return false;
+    if (Math.abs(prev.h - ln.h) > 0.5) return false;
+    return (prev.y - ln.y) <= ln.h * 1.8;
+  }
+
+  /**
    * Turn a page's lines into blocks, then merge blocks across page breaks when
    * a paragraph obviously continues.
    */
@@ -541,11 +565,16 @@
       var prev = lines[idx - 1];
       var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
       var heading = isHeadingLine(ln, bodyHeight, ctx);
+      var prevHeading = prev && isHeadingLine(prev, bodyHeight,
+        { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] });
+      // One heading wrapped over several lines stays one block.
+      var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
 
-      var breakHere = !cur || heading ||
-        (prev && isHeadingLine(prev, bodyHeight,
-                               { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] }));
-      if (!breakHere && prev) {
+      var breakHere = !cur || (!sameHeading && (heading || prevHeading));
+      // Not for a wrapped heading: the tests below are about paragraph shape,
+      // and display type is leaded far wider than a paragraph - the gap test
+      // would put the break back in that sameHeading just took out.
+      if (!breakHere && prev && !sameHeading) {
         if (prev.col !== ln.col) breakHere = true;
         else {
           var gap = prev.y - ln.y;
@@ -994,10 +1023,16 @@
       var prev = lines[idx - 1];
       var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
       var heading = isHeadingLine(ln, bodyHeight, ctx);
-      var breakHere = !cur || heading ||
-        (prev && isHeadingLine(prev, bodyHeight,
-                               { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] }));
-      if (!breakHere && prev) {
+      var prevHeading = prev && isHeadingLine(prev, bodyHeight,
+        { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] });
+      // One heading wrapped over several lines stays one group here too, so
+      // the page image groups the title the same way the reading view does.
+      var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
+      var breakHere = !cur || (!sameHeading && (heading || prevHeading));
+      // Not for a wrapped heading: the tests below are about paragraph shape,
+      // and display type is leaded far wider than a paragraph - the gap test
+      // would put the break back in that sameHeading just took out.
+      if (!breakHere && prev && !sameHeading) {
         if (prev.col !== ln.col) breakHere = true;
         else {
           var gap = prev.y - ln.y;
