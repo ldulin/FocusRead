@@ -258,15 +258,43 @@
       }
     });
 
+    // A gap of many ems inside one "line" is not a space. It is two different
+    // regions of the page that happen to sit at the same height - a marginal
+    // badge beside an abstract, a date rail beside an author list - and joining
+    // them splices one into the middle of the other's sentence: "ventral
+    // streams. A Check for updates long-standing hypothesis is that...".
+    // A word space is about a quarter of an em, so eight is far beyond any
+    // spacing within a line of prose.
+    var farApart = Math.max(24, median(heights) * 8);
+
+    function finishLine(ln, items) {
+      return {
+        col: ln.col,
+        y: ln.y,
+        items: items,
+        left: items[0].x,
+        right: items.reduce(function (m, b) { return Math.max(m, b.x + b.w); }, 0),
+        h: median(items.map(function (b) { return b.h; })),
+        text: joinItems(items)
+      };
+    }
+
+    var out = [];
     lines.forEach(function (ln) {
       ln.items.sort(function (a, b) { return a.x - b.x; });
-      ln.left = ln.items[0].x;
-      ln.right = ln.items.reduce(function (m, b) { return Math.max(m, b.x + b.w); }, 0);
-      ln.h = median(ln.items.map(function (b) { return b.h; }));
-      ln.text = joinItems(ln.items);
+      var run = [ln.items[0]];
+      for (var k = 1; k < ln.items.length; k++) {
+        var last = run[run.length - 1];
+        if (ln.items[k].x - (last.x + last.w) > farApart) {
+          out.push(finishLine(ln, run));
+          run = [];
+        }
+        run.push(ln.items[k]);
+      }
+      out.push(finishLine(ln, run));
     });
 
-    return lines.filter(function (ln) { return ln.text.trim().length > 0; });
+    return out.filter(function (ln) { return ln.text.trim().length > 0; });
   }
 
   /** Concatenate runs, inserting a space only where the glyphs are apart. */
@@ -363,6 +391,19 @@
    * to differ only in a figure number. Running heads are short, and they are
    * not mid-sentence continuations, so require both.
    */
+  /*
+   * Publisher chrome that sits in the MARGIN rather than at a page edge, so
+   * the running-head machinery never looks at it.
+   *
+   * The Crossmark badge is beside the abstract on most journal first pages and
+   * lands between two of its lines. That split the abstract in two - "ventral
+   * streams. A" and "long-standing hypothesis is that..." as separate reading
+   * units - and before lines were split on their gaps it was spliced into the
+   * sentence itself. Matched whole and exactly: a short line that merely
+   * mentions updates is not this.
+   */
+  var MARGIN_BADGE = /^check for updates$/i;
+
   function isFurniture(text) {
     var t = String(text).trim();
     if (!t || t.length > 70) return false;              // heads are short
@@ -416,10 +457,44 @@
     return /[.!?]\s+\S/.test(masked);
   }
 
-  function isHeadingLine(ln, bodyHeight) {
+  // A title is set in display type - two or three times the body. A lead
+  // paragraph or an abstract is set only slightly larger, in the same band as
+  // many section headings, so size alone cannot tell those two apart.
+  var DISPLAY_TYPE = 1.6;
+  var LARGER_TYPE = 1.18;
+
+  /**
+   * Is this line a heading rather than body text?
+   *
+   * @param {object} ln the line
+   * @param {number} bodyHeight median line height for the document
+   * @param {{rightEdge:number, prev:object}} [ctx] the measure this line is set
+   *   to and the line before it. Without it, any larger-than-body line counts
+   *   as a heading, which is what this used to do on its own - and what made
+   *   every line of a journal abstract a heading of its own.
+   */
+  function isHeadingLine(ln, bodyHeight, ctx) {
     var t = ln.text.trim();
     if (t.length > 90 || t.length < 3) return false;
-    if (ln.h > bodyHeight * 1.18) return true;
+
+    var ratio = ln.h / bodyHeight;
+    if (ratio > DISPLAY_TYPE) return true;          // a title, unambiguously
+    if (ratio > LARGER_TYPE) {
+      var edge = ctx && ctx.rightEdge;
+      if (!edge) return true;                       // no measure to judge by
+      // What separates a lead paragraph from a heading of the same size is the
+      // measure: the paragraph's lines run to the right margin, a heading
+      // stops well short of it.
+      var fills = function (l) { return l && l.right >= edge - bodyHeight * 4; };
+      if (fills(ln)) return false;
+      // A short line carrying on from a filled line of the SAME size is that
+      // paragraph's last line - "local spatial constraints." - not a heading.
+      var prev = ctx.prev;
+      if (prev && prev.col === ln.col && Math.abs(prev.h - ln.h) < 0.5 && fills(prev)) {
+        return false;
+      }
+      return true;
+    }
 
     // A numbered heading: "3. Results", "3.1 Data analysis", "1 Introduction".
     //
@@ -464,9 +539,12 @@
 
     lines.forEach(function (ln, idx) {
       var prev = lines[idx - 1];
-      var heading = isHeadingLine(ln, bodyHeight);
+      var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
+      var heading = isHeadingLine(ln, bodyHeight, ctx);
 
-      var breakHere = !cur || heading || (prev && isHeadingLine(prev, bodyHeight));
+      var breakHere = !cur || heading ||
+        (prev && isHeadingLine(prev, bodyHeight,
+                               { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] }));
       if (!breakHere && prev) {
         if (prev.col !== ln.col) breakHere = true;
         else {
@@ -628,6 +706,7 @@
           // 0 is the top of the LEFT column and the last entry is the foot of
           // the RIGHT one, so a two-column page had its real header kept and a
           // mid-page line examined instead.
+          if (MARGIN_BADGE.test(ln.text.trim())) { removedLines++; return false; }
           var atEdge = h ? (ln.y >= topBand || ln.y <= bottomBand) : true;
           if (!atEdge) return true;
           if (PAGE_NUMBER.test(ln.text)) { removedLines++; return false; }
@@ -861,6 +940,7 @@
     if (opts.stripRunningHeads !== false) {
       var top = viewport.height * 0.90, bottom = viewport.height * 0.10;
       lines = lines.filter(function (ln) {
+        if (MARGIN_BADGE.test(ln.text.trim())) { hide(ln); return false; }
         var atEdge = ln.y >= top || ln.y <= bottom;
         if (!atEdge) return true;
         if (PAGE_NUMBER.test(ln.text)) { hide(ln); return false; }
@@ -912,8 +992,11 @@
     var groups = [], cur = null;
     lines.forEach(function (ln, idx) {
       var prev = lines[idx - 1];
-      var heading = isHeadingLine(ln, bodyHeight);
-      var breakHere = !cur || heading || (prev && isHeadingLine(prev, bodyHeight));
+      var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
+      var heading = isHeadingLine(ln, bodyHeight, ctx);
+      var breakHere = !cur || heading ||
+        (prev && isHeadingLine(prev, bodyHeight,
+                               { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] }));
       if (!breakHere && prev) {
         if (prev.col !== ln.col) breakHere = true;
         else {

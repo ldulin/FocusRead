@@ -305,6 +305,38 @@
       eq('"3.1 Data analysis" is a heading', P.isHeadingLine(ln('3.1 Data analysis'), 10), true);
       eq('a named section is still a heading', P.isHeadingLine(ln('Discussion'), 10), true);
 
+      /* ---- a journal abstract is body text set in a larger face ----
+       * Measured from Nature Communications: body lines 8.2pt, the abstract
+       * 1.21x that and running to the right margin, the title 3.15x and
+       * falling 85pt short of it. Judging by size alone made every abstract
+       * line a heading of its own, so nothing joined into a paragraph: the
+       * hyphen at "Topo- graphic" never rejoined and each line was read out as
+       * if it were a sentence.
+       */
+      var EDGE = 561;
+      function big(t, right) { return { text: t, h: 9.95, left: 320, right: right, y: 600, col: 0 }; }
+      function title(t, right) { return { text: t, h: 25.9, left: 40, right: right, y: 700, col: 0 }; }
+      var measure = { rightEdge: EDGE, prev: null };
+
+      eq('a title is a heading even though it stops short of the margin',
+         P.isHeadingLine(title('A single computational objective can', 476), 8.22, measure), true);
+      eq('an abstract line running to the margin is not a heading',
+         P.isHeadingLine(big('units to respond similarly, better captures brain', 558), 8.22, measure),
+         false);
+      eq('nor is one a few points short of it',
+         P.isHeadingLine(big('emerged to support distinct visual behaviors. Here', 535), 8.22, measure),
+         false);
+      eq('the paragraph\'s short last line carries on from the filled one',
+         P.isHeadingLine(big('local spatial constraints.', 325), 8.22,
+                         { rightEdge: EDGE, prev: big('a single principle: learning generally useful', 556) }),
+         false);
+      eq('but a short larger-set line on its own is a heading',
+         P.isHeadingLine(big('Results', 360), 8.22,
+                         { rightEdge: EDGE, prev: { text: 'body text', h: 8.2, left: 320, right: 558, y: 610, col: 0 } }),
+         true);
+      eq('with no measure to judge by, larger type is still a heading',
+         P.isHeadingLine(big('units to respond similarly, better captures brain', 558), 8.22), true);
+
       eq('a complete sentence is never a heading',
          P.hasInnerTerminator('6.5 min. The dataset is open access.'), true);
       eq('an abbreviation is not an inner terminator',
@@ -431,6 +463,30 @@
       eq('a single line produces one block',
          P.linesToBlocks([{ text: 'Only one line here.', y: 700, left: 50, right: 300, h: 10, col: 0 }], 10, true).length,
          1);
+      /* ---- two regions at the same height are not one line ---- */
+      (function () {
+        // The Crossmark badge sits in the margin at the same height as a line
+        // of the abstract. Joined, it lands inside the sentence: "ventral
+        // streams. A Check for updates long-standing hypothesis is that...".
+        var boxes = [
+          { str: 'Check for updates', x: 40, y: 600, w: 70, h: 8 },
+          { str: 'long-standing hypothesis is that the organization', x: 320, y: 600, w: 240, h: 8 }
+        ].map(function (b) { return { str: b.str, x: b.x, y: b.y, w: b.w, h: b.h }; });
+        var ls = P.toLines(boxes.map(function (b) {
+          return { str: b.str, x: b.x, y: b.y, w: b.w, h: b.h, text: b.str };
+        }), null);
+        eq('a marginal badge is not joined to the text beside it', ls.length, 2);
+        eq('the badge keeps its own extent', Math.round(ls[0].right), 110);
+        eq('and the text keeps its own', Math.round(ls[1].left), 320);
+
+        // Ordinary spacing within a line must still be one line.
+        var near = P.toLines([
+          { str: 'ordinary words', x: 320, y: 500, w: 60, h: 8, text: 'ordinary words' },
+          { str: 'with normal spacing', x: 384, y: 500, w: 70, h: 8, text: 'with normal spacing' }
+        ], null);
+        eq('normal word spacing does not split a line', near.length, 1);
+      })();
+
       eq('empty boxes produce no lines', P.toLines([], null), []);
     })();
 
