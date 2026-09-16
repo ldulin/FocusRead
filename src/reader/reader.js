@@ -401,7 +401,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.2.9 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.3.0 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }

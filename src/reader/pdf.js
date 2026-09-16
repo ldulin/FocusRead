@@ -145,12 +145,17 @@
         var acrossLine = b < 0 ? -t[4] : t[4];
         out.push({
           str: it.str, x: alongLine, y: acrossLine,
-          w: it.width || 0, h: h, eol: !!it.hasEOL, rotated: true
+          w: it.width || 0, h: h, eol: !!it.hasEOL, rotated: true,
+          font: it.fontName || ''
         });
         return;
       }
 
-      out.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, h: h, eol: !!it.hasEOL });
+      // The font id comes along because a bullet is usually a single glyph
+      // from a symbol font, and that is the only thing distinguishing it from
+      // a letter: a filled circle in ZapfDingbats extracts as "d".
+      out.push({ str: it.str, x: t[4], y: t[5], w: it.width || 0, h: h,
+                 eol: !!it.hasEOL, font: it.fontName || '' });
     });
 
     return { boxes: out, rotatedRuns: rotatedRuns };
@@ -213,10 +218,29 @@
     }
     if (!best) return null;
 
-    var gutterWidth = ((best.end - best.start + 1) / BINS) * pageWidth;
+    // The bins LOCATE the gap; they must not be used to measure it. Each bin
+    // is about three points wide and a box's coverage is rounded outward at
+    // both ends, so a real fifteen-point gutter - a journal's Highlights
+    // column beside its author list - measures as nine and fails the floor
+    // below. Detection then gave up on the page and the two columns were read
+    // interleaved, a line of one and a line of the other.
+    //
+    // Measure it from the boxes themselves: the rightmost edge wholly left of
+    // the gap, and the leftmost edge wholly right of it. Anything spanning the
+    // gap - the title above both columns - belongs to neither and is ignored.
+    var midX = ((best.start + best.end + 1) / 2 / BINS) * pageWidth;
+    var leftMax = -Infinity, rightMin = Infinity;
+    boxes.forEach(function (b) {
+      var r = b.x + Math.max(b.w, 1);
+      if (r <= midX) leftMax = Math.max(leftMax, r);
+      else if (b.x >= midX) rightMin = Math.min(rightMin, b.x);
+    });
+    if (!isFinite(leftMax) || !isFinite(rightMin)) return null;
+
+    var gutterWidth = rightMin - leftMax;
     if (gutterWidth < pageWidth * 0.018) return null;          // too narrow to be a gutter
 
-    var gutter = ((best.start + best.end + 1) / 2 / BINS) * pageWidth;
+    var gutter = (leftMax + rightMin) / 2;
 
     // Both sides must carry real content, or this is a centred heading with
     // white space either side rather than a column break.
@@ -267,12 +291,38 @@
     // spacing within a line of prose.
     var farApart = Math.max(24, median(heights) * 8);
 
+    /*
+     * A list marker is one glyph from a different font than the text it
+     * introduces - a filled circle in a dingbat font, which extracts as the
+     * letter "d" and was read out as "d". Nothing in the characters says so;
+     * the font change does.
+     */
+    function markerNormalised(items) {
+      var first = items[0];
+      if (items.length < 2 || !first.font) return items;
+      if (String(first.str).trim().length !== 1) return items;
+      if (!items[1].font || items[1].font === first.font) return items;
+      var out = items.slice();
+      out[0] = { str: '\u2022', x: first.x, y: first.y, w: first.w, h: first.h, font: first.font };
+      return out;
+    }
+
     function finishLine(ln, items) {
+      items = markerNormalised(items);
+      // Where the TEXT of the line starts, as opposed to its marker. A bullet
+      // hangs to the left of its own text, so comparing the next line against
+      // `left` made every wrapped list item look like a fresh indented
+      // paragraph and split it in two.
+      var textLeft = items[0].x;
+      for (var t = 0; t < items.length; t++) {
+        if (String(items[t].str).trim().length > 1) { textLeft = items[t].x; break; }
+      }
       return {
         col: ln.col,
         y: ln.y,
         items: items,
         left: items[0].x,
+        textLeft: textLeft,
         right: items.reduce(function (m, b) { return Math.max(m, b.x + b.w); }, 0),
         h: median(items.map(function (b) { return b.h; })),
         text: joinItems(items)
@@ -460,6 +510,11 @@
   // A title is set in display type - two or three times the body. A lead
   // paragraph or an abstract is set only slightly larger, in the same band as
   // many section headings, so size alone cannot tell those two apart.
+  // A line opening with a list marker starts a new item, however it is laid
+  // out. Without this, normalising the marker to a bullet let consecutive
+  // items run together into one block.
+  var LIST_MARKER = /^[\u2022\u00B7\u25E6\u2023\u2043\u2219]\s/;
+
   var DISPLAY_TYPE = 1.6;
   var LARGER_TYPE = 1.18;
 
@@ -570,7 +625,8 @@
       // One heading wrapped over several lines stays one block.
       var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
 
-      var breakHere = !cur || (!sameHeading && (heading || prevHeading));
+      var breakHere = !cur || LIST_MARKER.test(ln.text) ||
+        (!sameHeading && (heading || prevHeading));
       // Not for a wrapped heading: the tests below are about paragraph shape,
       // and display type is leaded far wider than a paragraph - the gap test
       // would put the break back in that sameHeading just took out.
@@ -579,7 +635,8 @@
         else {
           var gap = prev.y - ln.y;
           if (gap > normalGap * 1.45) breakHere = true;
-          else if (ln.left - leftEdge > indentTol && ln.left - prev.left > indentTol) breakHere = true;
+          else if (ln.left - leftEdge > indentTol &&
+                   ln.left - (prev.textLeft || prev.left) > indentTol) breakHere = true;
           // A short last line followed by a capital is a paragraph end.
           else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
                    endsSentence(prev.text) &&
@@ -1028,7 +1085,8 @@
       // One heading wrapped over several lines stays one group here too, so
       // the page image groups the title the same way the reading view does.
       var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
-      var breakHere = !cur || (!sameHeading && (heading || prevHeading));
+      var breakHere = !cur || LIST_MARKER.test(ln.text) ||
+        (!sameHeading && (heading || prevHeading));
       // Not for a wrapped heading: the tests below are about paragraph shape,
       // and display type is leaded far wider than a paragraph - the gap test
       // would put the break back in that sameHeading just took out.
@@ -1037,7 +1095,8 @@
         else {
           var gap = prev.y - ln.y;
           if (gap > normalGap * 1.45) breakHere = true;
-          else if (ln.left - leftEdge > indentTol && ln.left - prev.left > indentTol) breakHere = true;
+          else if (ln.left - leftEdge > indentTol &&
+                   ln.left - (prev.textLeft || prev.left) > indentTol) breakHere = true;
           else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
                    endsSentence(prev.text) &&
                    /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;

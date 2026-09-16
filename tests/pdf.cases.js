@@ -556,6 +556,85 @@
          Object.keys(P.tokenSet('The And Gordon')).sort(), ['and', 'gordon', 'the']);
     })();
 
+    lines.push('\n--- a journal highlights page: two columns under a full-width title ---');
+    (function () {
+      // Geometry from a Neuron first page: the title spans both columns, the
+      // Highlights list is the left one and Authors / Correspondence / In
+      // brief the right, with a fifteen-point gutter at 58% across. The bullet
+      // is one glyph from a dingbat font, which extracts as the letter "d".
+      function B(str, x, y, w, h, f) {
+        return { str: str, x: x, y: y, w: w, h: h, font: f || 'body' };
+      }
+      var boxes = [
+        B('Neuron', 54, 700, 90, 22, 'display'),
+        B('Article', 470, 706, 50, 12, 'display'),
+        B('A unifying framework for functional organization in', 54, 668, 476, 14, 'display'),
+        B('early and higher ventral visual cortex', 54, 650, 330, 14, 'display'),
+        B('Highlights', 54, 618, 60, 10, 'bold'),
+        B('Authors', 352, 618, 50, 10, 'bold')
+      ];
+      [['Single model predicts function and spatial structure in early', 600],
+       ['and higher visual cortex', 589],
+       ['Best model uses self-supervised learning and a scalable', 572],
+       ['spatial constraint', 561]].forEach(function (pair, i) {
+        if (i % 2 === 0) boxes.push(B('d', 54, pair[1], 5, 8, 'dingbat'));
+        boxes.push(B(pair[0], 66, pair[1], 271, 8));
+      });
+      [['Eshed Margalit, Hyodong Lee,', 600],
+       ['Dawn Finzi, James J. DiCarlo,', 589],
+       ['Correspondence', 546],
+       ['eshed.margalit@gmail.com', 535]].forEach(function (pair) {
+        boxes.push(B(pair[0], 352, pair[1], 189, 8));
+      });
+
+      var gutter = P.detectColumns(boxes, 595);
+      eq('the gutter between the two columns is found', Math.round(gutter || 0), 345);
+
+      var ls = P.toLines(boxes, gutter);
+      var mixed = ls.filter(function (l) {
+        return /Margalit|Finzi|Correspondence/.test(l.text) &&
+               /model|constraint|cortex/.test(l.text);
+      });
+      eq('no line mixes the two columns', mixed.length, 0);
+
+      var blocks = P.linesToBlocks(ls, 8, true);
+      var texts = blocks.map(function (b) { return b.text; });
+      eq('a wrapped list item is one block, with a real bullet',
+         texts.indexOf('\u2022 Single model predicts function and spatial structure in early and higher visual cortex') !== -1,
+         true);
+      eq('and the next item is its own block',
+         texts.indexOf('\u2022 Best model uses self-supervised learning and a scalable spatial constraint') !== -1,
+         true);
+      eq('the letter the dingbat extracts as is gone',
+         texts.some(function (t) { return /(^|\s)d\s/.test(t); }), false);
+      eq('the author list is not broken up',
+         texts.indexOf('Eshed Margalit, Hyodong Lee, Dawn Finzi, James J. DiCarlo,') !== -1, true);
+    })();
+
+    lines.push('\n--- a gutter is measured from the boxes, not the bins ---');
+    (function () {
+      // 200 bins over a 595pt page is 3pt each, and coverage rounds outward at
+      // both ends, so a real 15pt gutter measured as 9pt and failed the floor.
+      var boxes = [];
+      for (var i = 0; i < 10; i++) {
+        boxes.push({ str: 'left column text here', x: 54, y: 600 - i * 11, w: 283, h: 8 });
+        boxes.push({ str: 'right column text here', x: 352, y: 600 - i * 11, w: 189, h: 8 });
+      }
+      boxes.push({ str: 'a title across both of them', x: 54, y: 660, w: 476, h: 14 });
+      var g = P.detectColumns(boxes, 595);
+      eq('a fifteen-point gutter is wide enough', g !== null, true);
+      eq('and it is placed between the columns, not at a bin edge',
+         Math.round(g || 0), 345);
+
+      // A genuinely narrow gap is still rejected.
+      var tight = [];
+      for (var k = 0; k < 10; k++) {
+        tight.push({ str: 'left', x: 54, y: 600 - k * 11, w: 291, h: 8 });
+        tight.push({ str: 'right', x: 350, y: 600 - k * 11, w: 191, h: 8 });
+      }
+      eq('a five-point gap is not a gutter', P.detectColumns(tight, 595), null);
+    })();
+
     return {
       pass: pass, fail: fail,
       report: lines.join('\n') + '\n\n==== ' + pass + ' passed, ' + fail + ' failed ===='
