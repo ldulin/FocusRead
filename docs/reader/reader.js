@@ -257,6 +257,7 @@
     $('splitBar').hidden = true;
     $('zoom').hidden = true;
     $('textSize').hidden = true;
+    $('pageWidth').hidden = true;
     document.body.classList.remove('split');
   }
 
@@ -401,7 +402,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.3.0 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.3.1 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -419,13 +420,53 @@
         showError('Could not open that file: ' + (e.message || e));
       });
     }
+    // A Word document has to be fetched whole and handed over as bytes: pdf.js
+    // is the only thing that can stream an address, and it can only stream a
+    // PDF. Without this, opening a .docx by address - which is what the
+    // toolbar button does - gave it to the PDF parser, which failed.
+    if (/\.docx(\?|#|$)/i.test(url)) {
+      return fetchRemote(url, creds).then(function (buf) {
+        if (stale(gen)) return;
+        showStatus('Opening ' + name + '...', 0.35);
+        return loadDocx(buf, gen);
+      }).catch(function (e) {
+        if (stale(gen)) return;
+        if (looksLikeAccessProblem(e) && offerHostAccess(url, gen)) return;
+        showError('Could not open that document: ' + (e.message || e));
+      });
+    }
+
     return loadPdf({ url: url }, creds, gen).catch(function (e) {
       if (stale(gen)) return;
       // A cross-origin fetch the extension has no host permission for fails
       // here, and no wording can fix that - only the permission can. Offer it
       // at the moment it is needed rather than asking for every site up front.
-      if (offerHostAccess(url, gen)) return;
+      // Only for failures that a permission would actually fix, though: a file
+      // that simply is not a PDF used to be reported as a permission problem,
+      // which sends the reader off to grant something that changes nothing.
+      if (looksLikeAccessProblem(e) && offerHostAccess(url, gen)) return;
       showError('Could not open that PDF: ' + (e.message || e));
+    });
+  }
+
+  /**
+   * Is this the kind of failure a host permission would fix?
+   *
+   * A refused fetch and a corrupt file arrive at the same catch, and telling
+   * someone to grant access to a site that answered perfectly well just wastes
+   * a permission prompt on a file that was never a PDF.
+   */
+  function looksLikeAccessProblem(err) {
+    var m = String((err && (err.message || err.name)) || '');
+    if (/invalid pdf|password|encrypted|not a (pdf|zip)|corrupt/i.test(m)) return false;
+    return /fetch|network|cors|failed|denied|blocked|http \d|unexpected server response|missing/i.test(m);
+  }
+
+  /** Fetch a document as bytes. */
+  function fetchRemote(url, creds) {
+    return fetch(url, { credentials: creds ? 'include' : 'omit' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
     });
   }
 
@@ -516,6 +557,10 @@
       if (stale(gen)) return;
       $('modes').hidden = true;
       $('pager').hidden = true;
+      // No page images, so no view to choose - but it IS the reading view, and
+      // the controls that belong to it should be there.
+      state.mode = 'reflow';
+      updateViewControls();
       var docEl = $('doc');
       docEl.innerHTML = out.html;
       docEl.hidden = false;
@@ -646,6 +691,75 @@
 
   var ZOOM_STEPS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 2.5, 3];
   var TEXT_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
+  var WIDTH_STEPS = [520, 600, 680, 740, 820, 920, 1040, 1180, 1340, 1500];
+  var WIDTH_DEFAULT = 740;
+
+  /* ------------------------------------------------------------------ *
+   * How wide the page of text is
+   *
+   * Every other view has a zoom; the reading view had a measure fixed at 46rem
+   * whatever the window was, so on a wide screen most of it went unused and
+   * the only way to fit more words on a line was to shrink the text.
+   * ------------------------------------------------------------------ */
+
+  function docWidth() {
+    var v = state.settings ? Number(state.settings.docWidth) : WIDTH_DEFAULT;
+    if (!isFinite(v) || v <= 0) return WIDTH_DEFAULT;
+    return Math.min(WIDTH_STEPS[WIDTH_STEPS.length - 1], Math.max(WIDTH_STEPS[0], v));
+  }
+
+  function showDocWidth() {
+    var w = docWidth();
+    $('widthLevel').textContent = String(Math.round(w));
+    $('widthNarrower').disabled = w <= WIDTH_STEPS[0];
+    $('widthWider').disabled = w >= WIDTH_STEPS[WIDTH_STEPS.length - 1];
+    $('widthFit').disabled = w === WIDTH_DEFAULT;
+    // Applied here as well as through the settings round trip, so the page
+    // resizes on the click rather than a moment after it.
+    document.documentElement.style.setProperty('--fr-doc-w', Math.round(w) + 'px');
+  }
+
+  function setDocWidth(w) {
+    w = Math.min(WIDTH_STEPS[WIDTH_STEPS.length - 1], Math.max(WIDTH_STEPS[0], w));
+    if (!state.settings || Math.abs(w - docWidth()) < 0.5) return;
+    state.settings.docWidth = w;
+    FR.settings.set({ docWidth: w });
+    showDocWidth();
+  }
+
+  function stepWidth(dir) {
+    var w = docWidth(), i;
+    if (dir > 0) {
+      for (i = 0; i < WIDTH_STEPS.length; i++) {
+        if (WIDTH_STEPS[i] > w + 0.5) return setDocWidth(WIDTH_STEPS[i]);
+      }
+    } else {
+      for (i = WIDTH_STEPS.length - 1; i >= 0; i--) {
+        if (WIDTH_STEPS[i] < w - 0.5) return setDocWidth(WIDTH_STEPS[i]);
+      }
+    }
+  }
+
+  /**
+   * Which toolbar controls belong to the view on screen.
+   *
+   * Split out because a Word document never goes through setMode - it has no
+   * page images and so no view buttons - and so never reached the line that
+   * unhid the text-size control. Opening a .docx left it with no way to change
+   * the text size at all.
+   */
+  function updateViewControls() {
+    var m = state.mode;
+    var reading = (m === 'reflow' || m === 'split');
+    $('zoom').hidden = !(m === 'original' || m === 'split');
+    $('textSize').hidden = !reading;
+    // Only where the measure is the reader's to set: in split view the pane
+    // decides how wide the text is.
+    $('pageWidth').hidden = m !== 'reflow';
+    showZoom();
+    showTextSize();
+    showDocWidth();
+  }
 
   /* ------------------------------------------------------------------ *
    * Reading-view text size
@@ -857,10 +971,7 @@
     state.fitWidth = 0;                  // the pane's width is about to change
     document.body.classList.toggle('split', mode === 'split');
     $('splitBar').hidden = mode !== 'split';
-    $('zoom').hidden = !(mode === 'original' || mode === 'split');
-    $('textSize').hidden = !(mode === 'reflow' || mode === 'split');
-    showZoom();
-    showTextSize();
+    updateViewControls();
 
     if (mode === 'original') return renderOriginal(gen);
     if (mode === 'split') return renderSplit(gen);
@@ -1209,6 +1320,10 @@
     $('textBigger').addEventListener('click', function () { stepText(1); });
     $('textSmaller').addEventListener('click', function () { stepText(-1); });
 
+    $('widthWider').addEventListener('click', function () { stepWidth(1); });
+    $('widthNarrower').addEventListener('click', function () { stepWidth(-1); });
+    $('widthFit').addEventListener('click', function () { setDocWidth(WIDTH_DEFAULT); });
+
     // About: a panel under the bar rather than a block above the document.
     var about = $('aboutBtn'), panel = $('aboutPanel');
     about.addEventListener('click', function (e) {
@@ -1294,6 +1409,7 @@
     FR.settings.onChange(function (s) {
       state.settings = s;
       showTextSize();
+      showDocWidth();
       showZoom();
     });
 

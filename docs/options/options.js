@@ -112,6 +112,8 @@
                       ['mono', 'Monospace'], ['dyslexic', 'OpenDyslexic (if installed)']] },
           { key: 'fontScale', type: 'range', label: 'Text size', min: 0.8, max: 2, step: 0.05, unit: 'x',
             hint: 'The A- and A+ buttons in the reader toolbar are this same setting.' },
+          { key: 'docWidth', type: 'number', label: 'Reading view page width', min: 520, max: 1500, step: 20,
+            hint: 'Pixels. How wide the page of text is in the reader, which decides how many words fit on a line. The width buttons in the reader toolbar are this same setting. It does not apply in Side by side, where the pane sets the width.' },
           { key: 'lineHeight', type: 'range', label: 'Line spacing', min: 1.2, max: 2.6, step: 0.05 },
           { key: 'letterSpacing', type: 'range', label: 'Letter spacing', min: 0, max: 3, step: 0.1, unit: 'px' },
           { key: 'wordSpacing', type: 'range', label: 'Word spacing', min: 0, max: 12, step: 0.5, unit: 'px' },

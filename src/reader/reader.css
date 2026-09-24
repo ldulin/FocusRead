@@ -145,7 +145,9 @@ button.primary:hover { filter: brightness(1.08); }
 
 /* ---------- reflowed document ---------- */
 .doc {
-  max-width: 46rem;
+  /* Set from the toolbar. The reading view is the only view with no zoom of
+     its own, and a fixed measure on a wide screen wastes most of it. */
+  max-width: var(--fr-doc-w, 46rem);
   margin: 34px auto 40vh;
   padding: 46px 52px 60px;
   background: var(--card);

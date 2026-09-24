@@ -53,6 +53,7 @@
     letterSpacing: 0,             // px
     wordSpacing: 0,               // px
     maxWidth: 0,                  // px; 0 = leave the page layout alone
+    docWidth: 740,                // px; how wide the reader's page of text is
     paperTint: 'none',            // 'none'|'sepia'|'gray'|'dark'
 
     /* --- translation --- */
