@@ -54,6 +54,7 @@
     wordSpacing: 0,               // px
     maxWidth: 0,                  // px; 0 = leave the page layout alone
     docWidth: 740,                // px; how wide the reader's page of text is
+    splitRatio: 0.5,              // 0.2-0.8; the page image's share of Side by side
     paperTint: 'none',            // 'none'|'sepia'|'gray'|'dark'
 
     /* --- translation --- */

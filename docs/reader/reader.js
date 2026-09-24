@@ -258,6 +258,7 @@
     $('zoom').hidden = true;
     $('textSize').hidden = true;
     $('pageWidth').hidden = true;
+    $('splitDivider').hidden = true;
     document.body.classList.remove('split');
   }
 
@@ -402,7 +403,7 @@
         }
         if (!r[1]) {
           showError('This copy of FocusRead does not have permission to read local files. Reload it on the ' +
-                    'chrome://extensions page - Settings should then show v0.3.1 or later. Or drop the file ' +
+                    'chrome://extensions page - Settings should then show v0.3.2 or later. Or drop the file ' +
                     'onto this window, which needs no permission at all.');
           return;
         }
@@ -740,6 +741,92 @@
     }
   }
 
+  /* ------------------------------------------------------------------ *
+   * How the two panes share the width
+   *
+   * Side by side is the one view where the toolbar's width control does not
+   * belong: the reading side has no measure of its own to set, it has whatever
+   * the pane leaves it. What there is to adjust is the share, and a divider
+   * between the panes is the control for that.
+   * ------------------------------------------------------------------ */
+
+  var SPLIT_MIN = 0.2, SPLIT_MAX = 0.8;
+
+  function splitRatio() {
+    var v = state.settings ? Number(state.settings.splitRatio) : 0.5;
+    if (!isFinite(v)) return 0.5;
+    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, v));
+  }
+
+  function showSplitRatio() {
+    var r = splitRatio();
+    var st = document.documentElement.style;
+    st.setProperty('--fr-split-left', r.toFixed(4) + 'fr');
+    st.setProperty('--fr-split-right', (1 - r).toFixed(4) + 'fr');
+    var d = $('splitDivider');
+    if (d) {
+      d.setAttribute('aria-valuenow', String(Math.round(r * 100)));
+      d.setAttribute('aria-valuemin', String(Math.round(SPLIT_MIN * 100)));
+      d.setAttribute('aria-valuemax', String(Math.round(SPLIT_MAX * 100)));
+    }
+  }
+
+  function setSplitRatio(r, persist) {
+    r = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, r));
+    if (!state.settings) return;
+    state.settings.splitRatio = r;
+    showSplitRatio();
+    // Only when the drag ends: a write per pointermove would be hundreds of
+    // storage round trips for one gesture.
+    if (!persist) return;
+    FR.settings.set({ splitRatio: r });
+    // The page image is drawn to fit its pane, and the pane just changed size
+    // without the window changing at all - so re-measure and redraw it, the
+    // same as a window resize does.
+    if (state.mode === 'split' && state.doc) {
+      state.fitWidth = 0;
+      commitZoom();
+    }
+  }
+
+  function wireSplitDivider() {
+    var d = $('splitDivider');
+    if (!d || d.dataset.wired) return;
+    d.dataset.wired = '1';
+
+    var dragging = false;
+    function ratioFrom(clientX) {
+      var box = $('stage').getBoundingClientRect();
+      if (!box.width) return splitRatio();
+      return (clientX - box.left) / box.width;
+    }
+    d.addEventListener('pointerdown', function (e) {
+      dragging = true;
+      document.body.classList.add('resizing');
+      try { d.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+      e.preventDefault();
+    });
+    d.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      setSplitRatio(ratioFrom(e.clientX), false);
+    });
+    function end() {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('resizing');
+      setSplitRatio(splitRatio(), true);          // write the settled value once
+    }
+    d.addEventListener('pointerup', end);
+    d.addEventListener('pointercancel', end);
+    d.addEventListener('dblclick', function () { setSplitRatio(0.5, true); });
+    d.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 0.1 : 0.02;
+      if (e.key === 'ArrowLeft') { setSplitRatio(splitRatio() - step, true); e.preventDefault(); }
+      else if (e.key === 'ArrowRight') { setSplitRatio(splitRatio() + step, true); e.preventDefault(); }
+      else if (e.key === 'Home') { setSplitRatio(0.5, true); e.preventDefault(); }
+    });
+  }
+
   /**
    * Which toolbar controls belong to the view on screen.
    *
@@ -756,9 +843,12 @@
     // Only where the measure is the reader's to set: in split view the pane
     // decides how wide the text is.
     $('pageWidth').hidden = m !== 'reflow';
+    $('splitDivider').hidden = m !== 'split';
     showZoom();
     showTextSize();
     showDocWidth();
+    showSplitRatio();
+    if (m === 'split') wireSplitDivider();
   }
 
   /* ------------------------------------------------------------------ *
@@ -1410,6 +1500,7 @@
       state.settings = s;
       showTextSize();
       showDocWidth();
+      showSplitRatio();
       showZoom();
     });
 

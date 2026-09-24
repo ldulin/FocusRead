@@ -6,7 +6,7 @@
 <title>FocusRead - read papers aloud, sentence by sentence</title>
 <meta name="description" content="Open a PDF or Word file and read it sentence by sentence: tap to hear it, dim the rest to stay focused, translate a word or the whole page. Works on your phone.">
 <meta name="color-scheme" content="light dark">
-<link rel="stylesheet" href="reader/reader.css?v=043e053f93">
+<link rel="stylesheet" href="reader/reader.css?v=9076947001">
 <link rel="stylesheet" href="content/content.css?v=3a7c868122">
 <link rel="icon" href="icons/icon32.png">
 <link rel="apple-touch-icon" href="icons/icon128.png">
@@ -14,7 +14,7 @@
 <meta name="theme-color" content="#1b1d21">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="FocusRead">
-<script>window.FR=window.FR||{};FR.BUILD="2026-09-24 f3dd810";</script>
+<script>window.FR=window.FR||{};FR.BUILD="2026-09-24 ea79f11";</script>
 <link rel="stylesheet" href="mobile.css?v=25f680bb23">
 </head>
 <body>
@@ -107,6 +107,10 @@
     <div class="track"><div id="statusBar" class="fill"></div></div>
   </section>
 
+  <div id="splitDivider" class="splitDivider" hidden role="separator"
+       aria-orientation="vertical" tabindex="0" aria-label="Resize the two panes"
+       title="Drag to give one side more room. Double-click to even them up."></div>
+
   <article id="doc" class="doc" hidden></article>
   <div id="pages" class="pages" hidden></div>
 
@@ -117,7 +121,7 @@
 
 <script src="shim.js?v=83b8ecf9a8"></script>
 <script src="lib/segmenter.js?v=6d8949c9b0"></script>
-<script src="lib/settings.js?v=75a3f65d5e"></script>
+<script src="lib/settings.js?v=a981e40778"></script>
 <script src="lib/translate.js?v=6bf182eff1"></script>
 <script src="content/speech.js?v=6e37cc2f5e"></script>
 <script src="content/engine.js?v=3cc6f9e661"></script>
@@ -125,7 +129,7 @@
 <script src="content/controller.js?v=9037933792"></script>
 <script src="reader/docx.js?v=74d6971811"></script>
 <script src="reader/pdf.js?v=98bd237ad1"></script>
-<script src="reader/reader.js?v=349a281999"></script>
+<script src="reader/reader.js?v=1b7337541d"></script>
 <script>
 (function () {
   // Somewhere to start without hunting for a file first.

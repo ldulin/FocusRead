@@ -306,7 +306,10 @@ button.primary:hover { filter: brightness(1.08); }
    you can hold a figure still while reading past it. */
 body.split #stage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* The divider is a real column, so it sits between the panes without any
+     absolute positioning to keep in step with them. */
+  grid-template-columns:
+    minmax(0, var(--fr-split-left, 1fr)) 9px minmax(0, var(--fr-split-right, 1fr));
   gap: 0;
   height: calc(100vh - 52px);
   overflow: hidden;
@@ -328,7 +331,36 @@ body.split .splitBar input { accent-color: var(--accent); }
 /* Source page on the left, the text you read on the right. #doc comes first
    in the markup (it is the default view), so order puts them back. */
 body.split #pages { order: 1; }
-body.split #doc   { order: 2; }
+body.split #splitDivider { order: 2; }
+body.split #doc   { order: 3; }
+
+/* The one control for how wide the reading side is. Everything else about the
+   split view is fixed by the window, and the toolbar's width control belongs
+   to the reading view on its own, where there is no second pane to take the
+   space from. */
+body.split #splitDivider {
+  display: block;
+  height: 100%;
+  cursor: col-resize;
+  background: var(--line);
+  position: relative;
+}
+body.split #splitDivider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 46px;
+  margin: -23px 0 0 -1.5px;
+  border-radius: 2px;
+  background: var(--muted);
+  opacity: .45;
+}
+body.split #splitDivider:hover { background: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+body.split #splitDivider:hover::after { opacity: .8; }
+body.split #splitDivider:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+body.split.resizing { cursor: col-resize; user-select: none; }
 
 body.split #pages,
 body.split #doc {
@@ -369,6 +401,7 @@ body.split fr-s { scroll-margin-bottom: 120px; }
   body.split #stage { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
   body.split #pages { border-right: 0; border-bottom: 1px solid var(--line); height: 60vh; }
   body.split #doc { height: auto; overflow: visible; }
+  body.split #splitDivider { display: none; }
 }
 
 /* ---------- highlighting over a page image ----------
