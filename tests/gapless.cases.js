@@ -159,6 +159,26 @@
        nv('Naturalist', true), false);
     eq('nothing is not a network voice', S.isNetworkVoice(null), false);
 
+    /* ================= which voices get the keep-alive ================= */
+    section('needsKeepAlive');
+
+    // pause()+resume() every nine seconds exists for Chrome's Google network
+    // voices, which stop after about fifteen. On Edge's Microsoft Online voices
+    // resume() does not reliably take, so the keep-alive itself stopped speech
+    // mid-sentence - silently, with the engine still reporting it as speaking.
+    var ka = function (name, local) { return S.needsKeepAlive({ name: name, localService: local }); };
+    eq('Google\'s network voice keeps it: that is what it is for',
+       ka('Google US English', false), true);
+    eq('an on-device voice keeps it: it has always been harmless there',
+       ka('Samantha', true), true);
+    eq('Microsoft\'s Online voice does not get it',
+       ka('Microsoft Andrew Online (Natural) - English (United States)', false), false);
+    eq('even if the browser claims it is on-device',
+       ka('Microsoft Andrew Online (Natural) - English (United States)', true), false);
+    eq('nor does any other network voice',
+       ka('Some Cloud Voice', false), false);
+    eq('an unknown voice behaves as it always did', S.needsKeepAlive(null), true);
+
     /* ================= what a voice is known to do ================= */
     section('emitsBoundaries');
 

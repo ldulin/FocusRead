@@ -74,6 +74,23 @@
     }, Promise.resolve()).then(function () { fake.speaking = false; return n; });
   };
 
+  /**
+   * Start the first queued utterance, report some words, and then go silent -
+   * no end, no error, still "speaking". That is what a stream that stops, or a
+   * resume() that does not take, looks like from the page.
+   */
+  window.__driveStall = function (opts) {
+    opts = opts || {};
+    var u = fake._queue.shift();
+    if (!u) return false;
+    fake.speaking = true;
+    if (u.onstart) u.onstart();
+    (opts.boundaries || []).forEach(function (b) {
+      if (u.onboundary) u.onboundary({ name: 'word', charIndex: b.charIndex, charLength: b.charLength || 3 });
+    });
+    return true;
+  };
+
   /** Run the queued utterances. opts.failAt = index that errors instead of ending. */
   window.__drive = function (opts) {
     opts = opts || {};
@@ -115,9 +132,9 @@
 </script>
 
 <script src="../../src/lib/segmenter.js?v=1789335851"></script>
-<script src="../../src/lib/settings.js?v=1789416460"></script>
+<script src="../../src/lib/settings.js?v=1790224027"></script>
 <script src="../../src/lib/translate.js?v=1789357531"></script>
-<script src="../../src/content/speech.js?v=1789431101"></script>
+<script src="../../src/content/speech.js?v=1790368569"></script>
 <script src="../../src/content/engine.js?v=1789366280"></script>
 
 <script>
@@ -635,6 +652,78 @@
     await lgp.catch(function () {});
     await sleep(20);
     eq('and it still reports as finished', rlong.ev.end, [50]);
+
+    section('speech - a voice that goes silent part-way through');
+
+    // stallMs shortens the watchdog for the test; in use it is eight seconds
+    // for a voice that reports its words.
+    var st = { stalls: [], ends: 0, errors: [] };
+    var stp = FR.speech.speak('One two three four five six seven eight nine ten.', {
+      rate: 1, localOnly: true, stallMs: 300, startStallMs: 300,
+      onstall: function (e) { st.stalls.push(e); },
+      onend: function () { st.ends++; },
+      onerror: function (e) { st.errors.push(e.error); }
+    });
+    await sleep(90);
+    window.__driveStall({ boundaries: [{ charIndex: 0, charLength: 3 }, { charIndex: 4, charLength: 3 }] });
+    await sleep(2500);
+    await stp.catch(function () {});
+    eq('a silent engine is noticed', st.stalls.length, 1);
+    eq('and not reported as finished', st.ends, 0);
+    eq('nor as an error, when someone is there to recover it', st.errors, []);
+    eq('the engine is told to stop, so nothing speaks on behind the recovery',
+       window.__fake._queue.length, 0);
+
+    section('speech - a pause is not a stall');
+
+    var sp = { stalls: 0, ends: 0 };
+    var spp = FR.speech.speak('One two three four five six seven eight nine ten.', {
+      rate: 1, localOnly: true, stallMs: 300, startStallMs: 300,
+      onstall: function () { sp.stalls++; },
+      onend: function () { sp.ends++; }
+    });
+    await sleep(90);
+    window.__driveStall({ boundaries: [{ charIndex: 0, charLength: 3 }] });
+    FR.speech.pause();
+    await sleep(2500);
+    eq('however long the reader leaves it paused', sp.stalls, 0);
+    FR.speech.resume();
+    eq('and resuming does not count the pause against it', sp.stalls, 0);
+    FR.speech.cancel();
+    await spp.catch(function () {});
+
+    section('speech - an utterance that finishes is left alone');
+
+    var sn = { stalls: 0, ends: 0 };
+    var snp = FR.speech.speak('Just a short one here.', {
+      rate: 1, localOnly: true, stallMs: 300, startStallMs: 300,
+      onstall: function () { sn.stalls++; },
+      onend: function () { sn.ends++; }
+    });
+    await sleep(90);
+    window.__drive({ boundaries: [{ charIndex: 0, charLength: 4 }] });
+    await snp.catch(function () {});
+    await sleep(1500);
+    eq('it ends', sn.ends, 1);
+    eq('and the watchdog never fires after it', sn.stalls, 0);
+
+    section('speech - a stall in a run names the sentence it happened in');
+
+    var sr = { stalls: [] };
+    var srp = FR.speech.speakRun([
+      { i: 60, text: 'Alpha beta gamma.' },
+      { i: 61, text: 'Delta epsilon zeta.' },
+      { i: 62, text: 'Eta theta iota.' }
+    ], {
+      rate: 1, localOnly: true, stallMs: 300, startStallMs: 300,
+      onstall: function (e) { sr.stalls.push(e.index); }
+    });
+    await sleep(90);
+    // It gets into the second sentence and stops there.
+    window.__driveStall({ boundaries: [{ charIndex: 0, charLength: 5 }, { charIndex: 18, charLength: 5 }] });
+    await sleep(2500);
+    await srp.catch(function () {});
+    eq('the recovery starts from the sentence it went silent in', sr.stalls, [61]);
 
     eq('an empty run ends immediately rather than hanging',
        (await (function () {

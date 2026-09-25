@@ -77,6 +77,7 @@
     this._runUsed = null;        // the budget the run in flight was planned with
     this._toldAboutRuns = false;
     this._noMerge = '';          // why this sentence is being spoken on its own
+    this._stalledAt = -1;        // the sentence the voice last went silent in
     this._merging = false;       // is this voice being smoothed at all?
     this._toldWhyGaps = false;
   }
@@ -343,6 +344,7 @@
   Controller.prototype._finishAndAdvance = function (rec, generation, mine) {
     var self = this, s = this.settings;
     this.engine.clearWord();
+    this._stalledAt = -1;          // it got through: a later stall gets its own retry
 
     var advance = function () {
       if (!mine()) return;
@@ -400,6 +402,29 @@
         self.ui.toast(e.error === 'unsupported'
           ? 'This browser has no speech engine available.'
           : 'Speech stopped (' + e.error + '). Press play to continue.', 4000);
+      },
+      // The voice went silent without saying so. Pick up from the sentence it
+      // stopped in - once. Stalling again on the SAME sentence means the voice
+      // is not going to manage it, and retrying forever would just freeze the
+      // reader in a loop instead of in place.
+      onstall: function (e) {
+        if (!mine()) return;
+        var at = (e && e.index >= 0) ? e.index : self.engine.index;
+        if (self._stalledAt === at) {
+          self._stalledAt = -1;
+          self.playing = false;
+          self.engine.clearWord();
+          self.ui.setState({ playing: false });
+          self.ui.toast('The voice stopped responding. Press play to try again.', 5000);
+          return;
+        }
+        self._stalledAt = at;
+        // A long utterance is the likeliest thing to lose, so ask for less
+        // next time rather than repeat exactly what just failed.
+        if (self._merging) self._shortenRuns(self._voiceKey());
+        self.engine.clearWord();
+        self.engine.setCurrent(at, { scroll: s.scrollFollow });
+        self.speakCurrent();
       }
     };
 

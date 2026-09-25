@@ -10,8 +10,11 @@
  *  1. Desktop Chrome silently TRUNCATES an utterance past roughly 200-250
  *     characters. Academic sentences routinely exceed that, so every sentence
  *     is split into sub-utterances at clause boundaries and queued in order.
- *  2. An utterance running longer than ~15s can stop early. A pause()/resume()
- *     heartbeat keeps it alive.
+ *  2. An utterance running longer than ~15s can stop early - Chrome's Google
+ *     network voices. A pause()/resume() heartbeat keeps it alive, and runs
+ *     ONLY where that is needed: on Edge's Microsoft Online voices resume()
+ *     does not reliably take, so the heartbeat itself stopped speech dead
+ *     mid-sentence. See needsKeepAlive.
  *  3. `boundary.charIndex` can point at the start of the NEXT word rather than
  *     the one being spoken. `lagWord` shifts the highlight back one event.
  *  4. `charLength` is often 0, and the macOS synthesiser has a history of
@@ -35,6 +38,10 @@
  *     ONE utterance and uses the voice's word boundaries to work out which
  *     sentence is being spoken. See `speakRun` for how a voice that truncates
  *     long utterances is detected and backed away from.
+ *  9. An engine can go silent mid-utterance and never say so - no end, no
+ *     error, `speaking` still true. A watchdog in `speak` treats a long enough
+ *     silence as a stall and reports it, so the caller can pick up again from
+ *     the sentence it stopped in instead of freezing there for good.
  */
 (function (root) {
   'use strict';
@@ -47,6 +54,9 @@
   var cadenceStarter = null;   // the timer that would START one
   var cadenceState = null;     // enough to resume an estimated cadence
   var boundarySeen = {};       // voiceURI -> does this voice report words?
+  var activeVoice = null;      // the voice the current utterance is using
+  var userPaused = false;      // the reader paused it; not a stall
+  var onUserResume = null;     // restarts the live utterance's stall clock
 
   var RATE_MIN = 0.5, RATE_MAX = 2.0;   // above 2.0 remote voices go silent
 
@@ -275,8 +285,27 @@
    * Heartbeat (quirk 2)
    * ------------------------------------------------------------------ */
 
+  /**
+   * Does this voice need the pause/resume keep-alive (quirk 2)?
+   *
+   * The keep-alive exists for one documented bug: Chrome's Google network
+   * voices stop after about fifteen seconds. On an on-device voice it is
+   * harmless, and stays. On Edge's Microsoft Online voices it is the opposite
+   * of harmless: resume() on a streamed voice does not reliably take, so a
+   * keep-alive landing mid-utterance can stop speech dead while the engine
+   * still reports it as speaking - no end event, no error, just silence.
+   * Merged runs made that routine rather than rare: an utterance used to be
+   * over inside nine seconds and now often runs for forty.
+   */
+  function needsKeepAlive(voice) {
+    if (!voice) return true;                        // unknown: as it always was
+    if (!isNetworkVoice(voice)) return true;        // on-device: harmless
+    return /google/i.test(String(voice.name || ''));
+  }
+
   function startHeartbeat() {
     stopHeartbeat();
+    if (!needsKeepAlive(activeVoice)) return;
     heartbeat = setInterval(function () {
       if (!synth || !synth.speaking) return stopHeartbeat();
       if (synth.paused) return;                 // a real user pause; leave it
@@ -363,6 +392,9 @@
     if (!full) { if (opts.onend) opts.onend({ empty: true }); return Promise.resolve(); }
 
     var mine = ++token;
+    // A new utterance is not paused, whatever the last one was: without this a
+    // pause followed by a click on another sentence left the watchdog asleep.
+    userPaused = false;
     stopHeartbeat();
     stopCadence();
     try { synth.cancel(); } catch (e) { /* noop */ }
@@ -376,12 +408,65 @@
           if (mine !== token) return resolve();
 
           var voice = pickVoice(voices, opts.voiceURI, opts.lang, opts.localOnly !== false);
+          activeVoice = voice || null;
           var vkey = voice ? String(voice.voiceURI || voice.name) : '';
           var pieces = splitForSpeech(full, opts.maxChars);
           var lastBoundary = null;      // for lagWord (quirk 3)
           var sawBoundary = false;
           var started = false;
           var finished = 0;
+
+          /*
+           * The stall watchdog.
+           *
+           * An engine can go silent in the middle of an utterance and never say
+           * so: no end, no error, `speaking` still true - a network voice whose
+           * stream stops, or a resume() that did not take. Nothing else in this
+           * file would ever notice, and the reader is left looking at a frozen
+           * highlight with the play button still showing Pause.
+           *
+           * So watch for progress - a word boundary, or a piece starting or
+           * ending - and call it a stall when there has been none for too long.
+           * "Too long" depends on what the voice can tell us: one that reports
+           * every word goes quiet for a second at most, so eight is plenty; one
+           * that reports nothing can only be judged against how long its piece
+           * ought to take to say, with room to spare.
+           */
+          var lastProgress = Date.now();
+          var currentChunk = pieces.length ? full.slice(pieces[0].start, pieces[0].end) : full;
+          var wordsMs = opts.stallMs || 8000;
+          var startMs = opts.startStallMs || 15000;
+          var watchdog = null;
+          function progress() { lastProgress = Date.now(); }
+          function stopWatchdog() {
+            if (watchdog) { clearInterval(watchdog); watchdog = null; }
+          }
+          function allowance() {
+            if (!started) return startMs;               // still fetching audio
+            if (sawBoundary) return wordsMs;
+            return Math.max(startMs, 2.2 * estimateSpeechMs(currentChunk, rate));
+          }
+          watchdog = setInterval(function () {
+            // Superseded - cancelled, or another utterance started. Settle the
+            // promise as this function promises to: the engine does not always
+            // report an utterance it abandoned mid-stream, and waiting on it
+            // then hangs whoever is waiting.
+            if (mine !== token) { stopWatchdog(); resolve(); return; }
+            // A pause is the reader's, not the engine's. resume() resets the
+            // clock, so the time spent paused is not counted against it either.
+            if (userPaused || (synth && synth.paused)) return;
+            if (Date.now() - lastProgress < allowance()) return;
+
+            stopWatchdog();
+            token++;                                    // nothing of it may speak on
+            stopHeartbeat();
+            stopCadence();
+            try { synth.cancel(); } catch (e3) { /* noop */ }
+            if (opts.onstall) opts.onstall({ charIndex: lastBoundary ? lastBoundary.charIndex : 0 });
+            else if (opts.onerror) opts.onerror({ error: 'stalled' });
+            resolve();
+          }, Math.min(1000, Math.max(100, Math.floor(wordsMs / 3))));
+          onUserResume = progress;
 
           function emit(b) {
             if (mine !== token || !opts.onboundary) return;
@@ -410,6 +495,8 @@
 
             u.onstart = function () {
               if (mine !== token) return;
+              progress();
+              currentChunk = chunk;
               if (!started) {
                 started = true;
                 startHeartbeat();
@@ -436,6 +523,7 @@
             u.onboundary = function (e) {
               if (mine !== token) return;
               if (e.name && e.name !== 'word') return;
+              progress();
               sawBoundary = true;
               if (vkey) boundarySeen[vkey] = true;
               stopCadence();
@@ -456,8 +544,10 @@
 
             u.onend = function () {
               if (mine !== token) return resolve();
+              progress();
               finished++;
               if (finished < pieces.length) return;
+              stopWatchdog();
               // Remember whether this voice reports words, but only judge it on
               // an utterance long enough to have contained several: a two-word
               // heading proves nothing either way.
@@ -485,6 +575,7 @@
               // stopped, and onend could never fire because the failed piece
               // never increments `finished`.
               token++;
+              stopWatchdog();
               stopHeartbeat();
               stopCadence();
               try { synth.cancel(); } catch (e2) { /* noop */ }
@@ -500,6 +591,7 @@
               // fires neither end nor error, so `finished` never reaches
               // pieces.length and onend is lost with no error reported at all.
               token++;
+              stopWatchdog();
               stopHeartbeat();
               stopCadence();
               try { synth.cancel(); } catch (e2) { /* noop */ }
@@ -777,12 +869,21 @@
         }
         if (opts.onend) opts.onend({ index: last.i, spoken: spans.length });
       },
+      // A stall is reported as the sentence the run had reached, which is
+      // where the caller has to pick up again.
+      onstall: function () {
+        if (opts.onstall) opts.onstall({ index: cur ? cur.i : spans[0].i });
+        else if (opts.onerror) opts.onerror({ error: 'stalled' });
+      },
+      stallMs: opts.stallMs,
+      startStallMs: opts.startStallMs,
       onerror: opts.onerror
     });
   }
 
   function cancel() {
     token++;
+    userPaused = false;
     stopHeartbeat();
     stopCadence();
     if (!synth) return;
@@ -795,6 +896,7 @@
       // stopCadence() clears cadenceState; keep a snapshot so resume() can pick
       // the highlight back up where it left off.
       var snap = (cadence || cadenceStarter) ? cadenceState : null;
+      userPaused = true;
       synth.pause();
       stopHeartbeat();
       stopCadence();
@@ -807,6 +909,8 @@
     if (!synth) return false;
     try {
       synth.resume();
+      userPaused = false;
+      if (onUserResume) onUserResume();       // time spent paused is not a stall
       startHeartbeat();
       // A voice that emits no boundary events was being tracked by the
       // estimated cadence; pause() stopped it, so without this the word
@@ -840,6 +944,7 @@
     spanAt: spanAt,
     emitsBoundaries: emitsBoundaries,
     isNetworkVoice: isNetworkVoice,
+    needsKeepAlive: needsKeepAlive,
     unspokenTail: unspokenTail,
     estimateSpeechMs: estimateSpeechMs,
     cancel: cancel,
