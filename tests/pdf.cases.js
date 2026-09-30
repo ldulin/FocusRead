@@ -635,6 +635,127 @@
       eq('a five-point gap is not a gutter', P.detectColumns(tight, 595), null);
     })();
 
+    lines.push('\n--- a full-width block above two columns: read it in bands ---');
+    (function () {
+      // A Cell Press Introduction page: a full-width Summary, then two columns.
+      // One gutter cannot describe it. When the Summary crossed the gutter
+      // often enough, detection gave up and the columns were read a line of
+      // each in turn - the right column's "alize to multiple areas." first of
+      // all. When it crossed rarely enough, the Summary was cut down the middle.
+      function words(line, x0, y) {
+        var out = [], x = x0;
+        line.split(' ').forEach(function (w) {
+          out.push({ str: w, x: x, y: y, w: w.length * 4.4, h: 8, font: 'body' });
+          x += w.length * 4.4 + 2.4;
+        });
+        return out;
+      }
+      function oneRun(line, x0, y) {
+        var sp = line.split(' ').length - 1;
+        return [{ str: line, x: x0, y: y, w: (line.length - sp) * 4.4 + sp * 2.4, h: 8, font: 'body' }];
+      }
+      var SUMMARY = [
+        'Recent work shows that a single computational model can predict both the responses',
+        'and the spatial layout of neurons in early and higher visual cortex of the primate, and',
+        'our results provide a unifying principle for the functional organization of the system.',
+        'A further summary line runs the full width of the page, just like the others above it.',
+        'A fifth line follows so that the summary is long enough to block a single gutter.',
+        'And a sixth line keeps crossing the middle of the page from one margin to the other.',
+        'With seven lines crossing it, no single gutter survives the whole-page scan at all.'
+      ];
+      var LEFT = ['INTRODUCTION',
+        'Sensory cortical systems can be measured in two ways: by the',
+        'response patterns of neurons as a function of stimulus input',
+        'and by the spatial arrangement of those neurons across the',
+        'cortical surface. These approaches do not gener-'];
+      var RIGHT = ['alize to multiple areas. Moreover, many prior models utilize',
+        'hand-crafted features and thus cannot explain how neuronal',
+        'response properties are learned from realistic sensory inputs.',
+        'Here, we introduce the topographic network model.'];
+
+      function page(make, summaryLines) {
+        var boxes = [];
+        SUMMARY.slice(0, summaryLines).forEach(function (t, k) { boxes = boxes.concat(make(t, 50, 700 - k * 11)); });
+        LEFT.forEach(function (t, k) { boxes = boxes.concat(make(t, 50, 600 - k * 11)); });
+        RIGHT.forEach(function (t, k) { boxes = boxes.concat(make(t, 318, 600 - k * 11)); });
+        return boxes;
+      }
+      function read(boxes) {
+        var ls = P.toLines(boxes.slice(), P.assignColumns(boxes, 612));
+        return P.mergeContinuations(P.linesToBlocks(ls, 8, true)).map(function (b) { return b.text; });
+      }
+      // Everything before the heading, and everything after it. Where the
+      // summary's own paragraph breaks fall is the paragraph rule's business;
+      // what matters here is what comes before what.
+      function split(blocks) {
+        var h = blocks.indexOf('INTRODUCTION');
+        return { before: blocks.slice(0, h).join(' '), heading: blocks[h], after: blocks.slice(h + 1).join(' ') };
+      }
+      var EXPECT_BODY = 'Sensory cortical systems can be measured in two ways: by the response patterns of ' +
+        'neurons as a function of stimulus input and by the spatial arrangement of those neurons across ' +
+        'the cortical surface. These approaches do not generalize to multiple areas. Moreover, many prior ' +
+        'models utilize hand-crafted features and thus cannot explain how neuronal response properties are ' +
+        'learned from realistic sensory inputs. Here, we introduce the topographic network model.';
+
+      // 1. one run per word, short summary: the page gutter IS found, and used
+      //    to cut the summary in two.
+      var a = split(read(page(words, 3)));
+      eq('a full-width summary is not cut down the gutter', a.before, SUMMARY.slice(0, 3).join(' '));
+      eq('the body reads left column, then right', a.after, EXPECT_BODY);
+
+      // 2. one run per line, long summary: no gutter survives the whole page -
+      //    the case that read the columns interleaved.
+      var boxes2 = page(oneRun, 7);
+      eq('(here the page as a whole has no gutter)', P.detectColumns(boxes2, 612), null);
+      var raw = read(boxes2), b = split(raw);
+      eq('the summary is read whole, in order, before anything else', b.before, SUMMARY.join(' '));
+      eq('the heading stays between them', b.heading, 'INTRODUCTION');
+      eq('and the body still finds its own two columns', b.after, EXPECT_BODY);
+      eq('so the right column\'s first line does not come first',
+         raw.some(function (t) { return t.indexOf('alize to multiple') === 0; }), false);
+
+      // 3. an ordinary two-column page is exactly what one gutter gives.
+      var plain = [];
+      LEFT.forEach(function (t, k) { plain = plain.concat(words(t, 50, 600 - k * 11)); });
+      RIGHT.forEach(function (t, k) { plain = plain.concat(words(t, 318, 600 - k * 11)); });
+      plain = plain.concat(words('Here, we introduce the topographic network model, again.', 318, 545));
+      var g = P.detectColumns(plain, 612), assign = P.assignColumns(plain, 612);
+      eq('with no full-width row, the columns are the single gutter\'s columns',
+         plain.every(function (bx) { return assign(bx) === (bx.x + bx.w / 2 < g ? 0 : 1); }), true);
+    })();
+
+    lines.push('\n--- what a row says about the page ---');
+    (function () {
+      function row(spans) {
+        return { y: 500, boxes: spans.map(function (s) { return { x: s[0], w: s[1] - s[0], y: 500, h: 8 }; }) };
+      }
+      eq('two columns with a gutter between them: split',
+         P.rowKind(row([[50, 300], [318, 562]]), 612, 8), 'split');
+      eq('one stretch across the page: wide',
+         P.rowKind(row([[50, 200], [203, 400], [403, 562]]), 612, 8), 'wide');
+      eq('text on the left only: neutral', P.rowKind(row([[50, 280]]), 612, 8), 'neutral');
+      eq('a left column that runs well past the middle is still not full width',
+         P.rowKind(row([[50, 380]]), 612, 8), 'neutral');
+      eq('a short heading: neutral', P.rowKind(row([[50, 130]]), 612, 8), 'neutral');
+    })();
+
+    lines.push('\n--- a line split off a wider row keeps its own height ---');
+    (function () {
+      // The "Check for updates" badge sits a little higher than the abstract
+      // line beside it. Split apart, the abstract line kept the row's averaged
+      // y - two points too high - which put the gap to the next line over the
+      // break threshold and split the abstract mid-sentence.
+      var ls = P.toLines([
+        { str: 'Check for updates', x: 52, y: 495, w: 60, h: 8 },
+        { str: 'long-standing hypothesis is that the functional organization into streams',
+          x: 217, y: 489.9, w: 325, h: 8 }
+      ], null);
+      var text = ls.filter(function (l) { return /long-standing/.test(l.text); })[0];
+      eq('the badge and the text are two lines', ls.length, 2);
+      eq('and the text line is where its own words are, not the row average',
+         Math.round(text.y * 10) / 10, 489.9);
+    })();
+
     return {
       pass: pass, fail: fail,
       report: lines.join('\n') + '\n\n==== ' + pass + ' passed, ' + fail + ' failed ===='

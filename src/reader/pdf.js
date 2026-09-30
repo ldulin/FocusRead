@@ -169,14 +169,15 @@
    * We test the obvious hypothesis - a gutter near the middle - by counting how
    * many text runs straddle it.
    */
-  function detectColumns(boxes, pageWidth) {
+  function detectColumns(boxes, pageWidth, opts) {
+    var minBoxes = (opts && opts.minBoxes) || 12;
     // Enough runs to be meaningful, but not many. A PDF that emits one run per
     // LINE rather than per word gives a full two-column page only ~30 runs, and
     // a 40-run floor silently skipped column detection on every one of them -
     // so the two columns were read interleaved, half a sentence at a time.
     // False positives are held off by the gutter width and the 25%-each-side
     // test below, not by this count.
-    if (boxes.length < 12 || !pageWidth) return null;
+    if (boxes.length < minBoxes || !pageWidth) return null;
 
     // Counting how many runs STRADDLE the midline only works when a run is a
     // whole line. Plenty of PDFs emit one run per word, and a word almost
@@ -255,16 +256,137 @@
   }
 
   function columnOf(b, gutter) {
-    if (gutter === null) return 0;
+    if (gutter === null || gutter === undefined) return 0;
     return (b.x + b.w / 2) < gutter ? 0 : 1;
   }
 
-  /** Group boxes into visual lines. */
+  /*
+   * Horizontal bands.
+   *
+   * A journal page often stacks two structures: a full-width summary, abstract
+   * or title above, two columns of body below. One gutter cannot describe that
+   * page, and trying got it wrong both ways. When the full-width block crossed
+   * the gutter often enough, detection gave up and the body's two columns were
+   * read as one, a line of each in turn - "Moreover, many prior models utilize
+   * ... neuronal Sensory cortical systems can be measured". When it crossed
+   * rarely enough to be tolerated, the gutter was found and the full-width
+   * block was cut in half down it instead, the left halves of its lines read
+   * together before either column.
+   *
+   * So the page is read as bands, cut at the rows that run the full width, and
+   * each band finds its own columns - or none, for a band of full-width text.
+   * A page with no full-width row is one band, and comes out exactly as a
+   * single gutter would have it.
+   */
+
+  /** Rows of the page, top first, each with its runs sorted left to right. */
+  function rowsOf(boxes) {
+    var lineTol = Math.max(2, median(boxes.map(function (b) { return b.h; })) * 0.55);
+    var sorted = boxes.slice().sort(function (a, b) { return b.y - a.y; });
+    var rows = [], cur = null;
+    sorted.forEach(function (b) {
+      if (cur && Math.abs(b.y - cur.y) <= lineTol) {
+        cur.boxes.push(b);
+        cur.y = (cur.y * (cur.boxes.length - 1) + b.y) / cur.boxes.length;
+      } else {
+        cur = { y: b.y, boxes: [b] };
+        rows.push(cur);
+      }
+    });
+    rows.forEach(function (r) { r.boxes.sort(function (a, b) { return a.x - b.x; }); });
+    return rows;
+  }
+
+  /**
+   * What a row says about the page's structure at its height.
+   *
+   *  'split'   a gap wide enough to be a gutter, somewhere in the middle third
+   *  'wide'    one stretch of text reaching from the left third to the right
+   *            third - which no line of a two-column body can do
+   *  'neutral' neither: text on one side only, a short heading, a page number
+   *
+   * Only a 'wide' row can change the structure. A neutral row - the blank
+   * right column beside the end of a paragraph - says nothing, and letting it
+   * cut the page would put the right column above the left one below it.
+   */
+  function rowKind(row, pageWidth, bodyH) {
+    var minGutter = Math.max(pageWidth * 0.018, bodyH * 1.2);
+    var join = minGutter * 0.8;                     // a word space, not a gutter
+    var spans = [], cur = null;
+    row.boxes.forEach(function (b) {
+      var r = b.x + Math.max(b.w, 1);
+      if (cur && b.x - cur.r <= join) { cur.r = Math.max(cur.r, r); }
+      else { cur = { l: b.x, r: r }; spans.push(cur); }
+    });
+    for (var i = 1; i < spans.length; i++) {
+      var gap = spans[i].l - spans[i - 1].r;
+      var mid = (spans[i].l + spans[i - 1].r) / 2;
+      if (gap >= minGutter && mid > pageWidth * 0.30 && mid < pageWidth * 0.70) return 'split';
+    }
+    for (var j = 0; j < spans.length; j++) {
+      if (spans[j].l < pageWidth * 0.35 && spans[j].r > pageWidth * 0.65) return 'wide';
+    }
+    return 'neutral';
+  }
+
+  /**
+   * Which column each run belongs to, as a key that also orders the reading:
+   * band by band from the top, left column before right within each.
+   *
+   * @returns {function(box): number}
+   */
+  function assignColumns(boxes, pageWidth) {
+    var whole = detectColumns(boxes, pageWidth);
+    var single = function (b) { return columnOf(b, whole); };
+    if (!pageWidth || boxes.length < 12) return single;
+
+    var bodyH = median(boxes.map(function (b) { return b.h; })) || 10;
+    var rows = rowsOf(boxes);
+    var bands = [], cur = null;
+    rows.forEach(function (row) {
+      var kind = rowKind(row, pageWidth, bodyH);
+      if (!cur) { cur = { kind: kind === 'neutral' ? null : kind, rows: [row] }; bands.push(cur); return; }
+      if (kind === 'neutral' || kind === cur.kind || cur.kind === null) {
+        if (cur.kind === null && kind !== 'neutral') cur.kind = kind;
+        cur.rows.push(row);
+        return;
+      }
+      cur = { kind: kind, rows: [row] };
+      bands.push(cur);
+    });
+
+    // No full-width row anywhere: an ordinary page, and one gutter is right.
+    if (!bands.some(function (b) { return b.kind === 'wide'; })) return single;
+
+    var gutterOf = [];
+    bands.forEach(function (band, bi) {
+      var inBand = [];
+      band.rows.forEach(function (r) { r.boxes.forEach(function (b) { b.band = bi; inBand.push(b); }); });
+      if (band.kind === 'wide') { gutterOf[bi] = null; return; }
+      // A band finds its own gutter. A short one may not have runs enough to
+      // be sure, and then the page's own gutter is the best guess - it is the
+      // same body text, only interrupted.
+      var g = detectColumns(inBand, pageWidth, { minBoxes: 6 });
+      gutterOf[bi] = g !== null ? g : whole;
+    });
+
+    return function (b) {
+      var bi = b.band || 0;
+      return bi * 2 + columnOf(b, gutterOf[bi]);
+    };
+  }
+
+  /**
+   * Group boxes into visual lines.
+   * @param {number|null|function} gutter the gutter's x, null for one column,
+   *   or a function giving each box its column key (see assignColumns)
+   */
   function toLines(boxes, gutter) {
     var heights = boxes.map(function (b) { return b.h; });
     var lineTol = Math.max(2, median(heights) * 0.55);
 
-    boxes.forEach(function (b) { b.col = columnOf(b, gutter); });
+    var colOf = typeof gutter === 'function' ? gutter : function (b) { return columnOf(b, gutter); };
+    boxes.forEach(function (b) { b.col = colOf(b); });
     boxes.sort(function (a, b) {
       if (a.col !== b.col) return a.col - b.col;
       if (Math.abs(a.y - b.y) > lineTol) return b.y - a.y;   // PDF y grows upward
@@ -319,7 +441,11 @@
       }
       return {
         col: ln.col,
-        y: ln.y,
+        // Its OWN height on the page. A line split off from a wider row kept
+        // the row's averaged y, which a marginal badge sitting higher dragged
+        // up by two points - enough, against the break threshold, to split an
+        // abstract mid-sentence at "...into streams" / "emerged to support".
+        y: items.reduce(function (m, b) { return m + b.y; }, 0) / items.length,
         items: items,
         left: items[0].x,
         textLeft: textLeft,
@@ -760,15 +886,16 @@
                 }
               }
 
-              var gutter = detectColumns(boxes, base.width);
-              var lines = toLines(boxes, gutter);
+              var lines = toLines(boxes, assignColumns(boxes, base.width));
               lines.forEach(function (ln) { allHeights.push(ln.h); });
               perPage.push({
                 page: pageNum,
                 lines: lines,
                 height: base.height,
                 width: base.width,
-                columns: gutter === null ? 1 : 2
+                // Two columns if any line landed in a right-hand column. The
+                // column key is band * 2 + side, so an odd key is a right one.
+                columns: lines.some(function (ln) { return (ln.col || 0) % 2 === 1; }) ? 2 : 1
               });
               page.cleanup();
               if (onProgress) onProgress(pageNum / total);
@@ -1015,8 +1142,7 @@
     var boxes = allBoxes.filter(function (b) { return b.el && !b.rotated; });
     if (boxes.length < 2) return 0;
 
-    var gutter = detectColumns(boxes, viewport.width);
-    var lines = toLines(boxes, gutter);
+    var lines = toLines(boxes, assignColumns(boxes, viewport.width));
     if (!lines.length) return 0;
 
     var bodyHeight = median(lines.map(function (l) { return l.h; })) || 10;
@@ -1175,6 +1301,9 @@
     _internals: {
       toBoxes: toBoxes,
       detectColumns: detectColumns,
+      assignColumns: assignColumns,
+      rowKind: rowKind,
+      rowsOf: rowsOf,
       toLines: toLines,
       linesToBlocks: linesToBlocks,
       findRunningHeads: findRunningHeads,
