@@ -309,24 +309,191 @@
    * right column beside the end of a paragraph - says nothing, and letting it
    * cut the page would put the right column above the left one below it.
    */
-  function rowKind(row, pageWidth, bodyH) {
-    var minGutter = Math.max(pageWidth * 0.018, bodyH * 1.2);
-    var join = minGutter * 0.8;                     // a word space, not a gutter
+  /** A row's runs, merged wherever the space between them is only a word space. */
+  function spansOf(row, join) {
     var spans = [], cur = null;
     row.boxes.forEach(function (b) {
       var r = b.x + Math.max(b.w, 1);
       if (cur && b.x - cur.r <= join) { cur.r = Math.max(cur.r, r); }
       else { cur = { l: b.x, r: r }; spans.push(cur); }
     });
+    return spans;
+  }
+
+  // Column keys for a running head and a footer: before and after any band.
+  var HEAD_KEY = -2, FOOT_KEY = 100000;
+  function isEdgeKey(col) { return col === HEAD_KEY || col === FOOT_KEY; }
+
+  function rowJoin(pageWidth, bodyH) {
+    return Math.max(pageWidth * 0.018, bodyH * 1.2) * 0.8;   // a word space, not a gutter
+  }
+
+  // The gap down the middle of a two-column row, or null. Given the page's
+  // gutter `at`, only the gap that contains it: the first wide gap in a row
+  // can be one inside a column - a centred equation and its number.
+  function rowGap(row, pageWidth, bodyH, at) {
+    var minGutter = Math.max(pageWidth * 0.018, bodyH * 1.2);
+    var spans = spansOf(row, rowJoin(pageWidth, bodyH));
     for (var i = 1; i < spans.length; i++) {
       var gap = spans[i].l - spans[i - 1].r;
       var mid = (spans[i].l + spans[i - 1].r) / 2;
-      if (gap >= minGutter && mid > pageWidth * 0.30 && mid < pageWidth * 0.70) return 'split';
+      var here = at === null || at === undefined || (spans[i - 1].r <= at && spans[i].l >= at);
+      if (gap >= minGutter && mid > pageWidth * 0.30 && mid < pageWidth * 0.70 && here) {
+        return { l: spans[i - 1].r, r: spans[i].l };
+      }
     }
+    return null;
+  }
+
+  function rowKind(row, pageWidth, bodyH) {
+    if (rowGap(row, pageWidth, bodyH)) return 'split';
+    var spans = spansOf(row, rowJoin(pageWidth, bodyH));
     for (var j = 0; j < spans.length; j++) {
       if (spans[j].l < pageWidth * 0.35 && spans[j].r > pageWidth * 0.65) return 'wide';
     }
     return 'neutral';
+  }
+
+  /*
+   * Asides: a narrow column at the very edge of the page.
+   *
+   * Journals put a copyright and licence notice, or a received / accepted rail,
+   * in a slim column beside the title and abstract. Its gutter is near the edge
+   * - 80% across, not the middle third where a gutter is looked for - and only
+   * about two ems wide, far short of what splits a line on its own. So each
+   * line of the abstract was joined to the line of the notice beside it: "but
+   * the causal pres- under a Creative sures driving these topographic motifs".
+   *
+   * What gives such a column away is that the same narrow gap runs down the
+   * edge of the page for line after line, with prose on the far side of it. Its
+   * text is then read on its own, after the block it stands beside.
+   */
+  var ASIDE_ZONES = { left: [0.06, 0.32], right: [0.68, 0.94] };
+
+  function findAsides(rows, pageWidth, bodyH) {
+    var minGap = Math.max(pageWidth * 0.018, bodyH * 1.5);
+    var join = minGap * 0.8;
+    var found = [];
+
+    ['left', 'right'].forEach(function (side) {
+      var zone = ASIDE_ZONES[side];
+      var hits = [];
+      rows.forEach(function (row, ri) {
+        var sp = spansOf(row, join);
+        for (var i = 1; i < sp.length; i++) {
+          var l = sp[i - 1].r, r = sp[i].l;
+          if (r - l < minGap) continue;
+          var f = (l + r) / 2 / pageWidth;
+          // The width of the text directly across the gap from the aside.
+          var across = side === 'right' ? sp[i - 1].r - sp[i - 1].l : sp[i].r - sp[i].l;
+          if (f >= zone[0] && f <= zone[1]) hits.push({ ri: ri, l: l, r: r, across: across });
+        }
+      });
+      if (hits.length < 3) return;
+
+      // It has to be the SAME gap on each row: group them by where it sits -
+      // by its right-hand edge, which is fixed on both sides: the main text's
+      // margin beside a left rail, the aside's own beside a right one. The
+      // other edge is the end of a ragged line, and grouping by the middle let
+      // a rail with long and short lines fall into two groups, half lifted out
+      // and half left spliced into the abstract.
+      hits.sort(function (a, b) { return a.r - b.r; });
+      var groups = [], g = null;
+      hits.forEach(function (h) {
+        if (g && h.r - g.r0 <= pageWidth * 0.03) g.hits.push(h);
+        else { g = { r0: h.r, hits: [h] }; groups.push(g); }
+      });
+      groups.sort(function (a, b) { return b.hits.length - a.hits.length; });
+      var best = groups[0];
+      var rowsHit = {};
+      best.hits.forEach(function (h) { rowsHit[h.ri] = true; });
+      if (Object.keys(rowsHit).length < 3) return;
+
+      var zoneL = -Infinity, zoneR = Infinity, top = Infinity, bot = -Infinity;
+      best.hits.forEach(function (h) {
+        zoneL = Math.max(zoneL, h.l);
+        zoneR = Math.min(zoneR, h.r);
+        top = Math.min(top, h.ri);
+        bot = Math.max(bot, h.ri);
+      });
+      if (zoneR - zoneL < minGap * 0.6) return;
+
+      function onAsideSide(b) {
+        return side === 'right' ? b.x >= zoneR - 1 : b.x + Math.max(b.w, 1) <= zoneL + 1;
+      }
+      function keepsClear(row) {
+        return row.boxes.every(function (b) {
+          return b.x >= zoneR - 1 || b.x + Math.max(b.w, 1) <= zoneL + 1;
+        });
+      }
+      function hasAside(row) { return row.boxes.some(onAsideSide); }
+
+      // Grow it over the rows next to it that still have text in the column
+      // and nothing across the gap - the notice's first line often sits beside
+      // a short running head, where the gap is no gap at all.
+      while (top > 0 && keepsClear(rows[top - 1]) && hasAside(rows[top - 1])) top--;
+      while (bot < rows.length - 1 && keepsClear(rows[bot + 1]) && hasAside(rows[bot + 1])) bot++;
+      for (var k = top; k <= bot; k++) if (!keepsClear(rows[k])) return;
+
+      var boxes = [];
+      for (k = top; k <= bot; k++) rows[k].boxes.forEach(function (b) { if (onAsideSide(b)) boxes.push(b); });
+
+      // Prose. A column of figures, or the line numbers down the margin of a
+      // manuscript, has the same shape and must not be lifted out of place.
+      var text = boxes.map(function (b) { return b.str; }).join(' ');
+      var letters = (text.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
+      var visible = (text.match(/\S/g) || []).length;
+      if (!visible || letters / visible < 0.6) return;
+      // And running prose, not a stack of labels. The axis and area names down
+      // the side of a figure - "retina", "V1", "V2", "VTC" - are letters too,
+      // but one word to a line; a notice set in a slim column still averages
+      // two or three.
+      var lineRows = 0;
+      for (k = top; k <= bot; k++) if (rows[k].boxes.some(onAsideSide)) lineRows++;
+      var words = (text.match(/[A-Za-z\u00C0-\u024F]{2,}/g) || []).length;
+      if (words < 8 || words / Math.max(1, lineRows) < 1.8) return;
+
+      var aL = Infinity, aR = -Infinity;
+      boxes.forEach(function (b) { aL = Math.min(aL, b.x); aR = Math.max(aR, b.x + Math.max(b.w, 1)); });
+      if (aR - aL > pageWidth * 0.35) return;          // a column, not a margin note
+
+      // Beside running prose. Across the gap from a notice is the abstract,
+      // most of the page wide. Across from the labels of a table it is the
+      // column of values; across from the first of four news columns, the
+      // second, as narrow as itself - those are one table, or one page of
+      // columns, and are read as they stand.
+      var wideAcross = best.hits.filter(function (h) {
+        return h.across >= Math.max((aR - aL) * 2, pageWidth * 0.35);
+      }).length;
+      if (wideAcross < best.hits.length * 0.6) return;
+
+      // And a passage in its own right, set line after line at one leading
+      // (a paragraph break or two aside), not a term at the head of each
+      // entry of a glossary.
+      var ys = [];
+      for (k = top; k <= bot; k++) if (rows[k].boxes.some(onAsideSide)) ys.push(rows[k].y);
+      var steps = [];
+      for (k = 1; k < ys.length; k++) steps.push(ys[k - 1] - ys[k]);
+      var step = median(steps);
+      var even = steps.filter(function (d) { return Math.abs(d - step) <= step * 0.25; }).length;
+      if (!step || even < steps.length * 0.75 || steps.some(function (d) { return d > step * 3; })) return;
+
+      // That wraps from line to line - a sentence carried on in lower case -
+      // or that says what it is. A list of terms, one to a line and each
+      // capitalised, does neither.
+      var lineTexts = [];
+      for (k = top; k <= bot; k++) {
+        var t = rows[k].boxes.filter(onAsideSide).map(function (b) { return b.str; }).join(' ').trim();
+        if (t) lineTexts.push(t);
+      }
+      var carried = lineTexts.slice(1).filter(function (t) { return /^[a-z\u00DF-\u00FF]/.test(t); }).length;
+      var says = /copyright|\u00A9|licen[cs]e|creative commons|received|accepted|published|correspondence|doi|citation|editor|funding|open access/i.test(text);
+      if (carried < (lineTexts.length - 1) * 0.25 && !says) return;
+
+      boxes.forEach(function (b) { b.aside = side; });
+      found.push({ side: side, bottomY: rows[bot].y });
+    });
+    return found;
   }
 
   /**
@@ -336,15 +503,124 @@
    * @returns {function(box): number}
    */
   function assignColumns(boxes, pageWidth) {
-    var whole = detectColumns(boxes, pageWidth);
-    var single = function (b) { return columnOf(b, whole); };
-    if (!pageWidth || boxes.length < 12) return single;
+    boxes.forEach(function (b) { delete b.aside; delete b.band; delete b.edge; });
+    if (!pageWidth || boxes.length < 12) {
+      var tiny = detectColumns(boxes, pageWidth);
+      return function (b) { return columnOf(b, tiny); };
+    }
 
     var bodyH = median(boxes.map(function (b) { return b.h; })) || 10;
-    var rows = rowsOf(boxes);
-    var bands = [], cur = null;
-    rows.forEach(function (row) {
-      var kind = rowKind(row, pageWidth, bodyH);
+    // Asides come out first, so the rest of the page is judged without them.
+    var asides = findAsides(rowsOf(boxes), pageWidth, bodyH);
+    var main = asides.length ? boxes.filter(function (b) { return !b.aside; }) : boxes;
+
+    var whole = detectColumns(main, pageWidth);
+    var rows = rowsOf(main);
+
+    // An aside is read after the band it ends beside: never in the middle of a
+    // band, where it would cut a paragraph, and with a key that is not a whole
+    // number so that it is known for an aside further on.
+    var bandBottoms = [];
+    function asideKey(b) {
+      var a = asides.filter(function (x) { return x.side === b.aside; })[0];
+      var bi = 0;
+      for (var i = 0; i < bandBottoms.length; i++) {
+        if (bandBottoms[i] <= a.bottomY + 0.5) { bi = i; break; }
+        bi = i;
+      }
+      return bi * 2 + (b.aside === 'left' ? 1.25 : 1.5);
+    }
+    // A footer or running head set across the foot of a two-column page can
+    // start well inside the left half - "Neuron 112, 2435-2451, July 17, 2024,
+    // (c) 2024 Elsevier Inc." from 40% across - and so is not wide by the test
+    // above. Left in with the columns it was cut at the gutter: "Neuron 112"
+    // went to the end of the left column, where it was read in front of the
+    // first words of the right one.
+    //
+    // Such a row is told by text running right across the gap between the
+    // columns, and is looked for only from the edge of the page inward: a row
+    // with column text beyond it is an overlong line of that column - a URL in
+    // the last reference - and stays where it is. A row found this way is read
+    // before or after everything else on the page and takes no part in the
+    // bands below, so the page is otherwise laid out exactly as it was.
+    var kinds = rows.map(function (row) { return rowKind(row, pageWidth, bodyH); });
+    var firstSplit = kinds.indexOf('split'), lastSplit = kinds.lastIndexOf('split');
+    var edgeOf = [];
+    if (firstSplit >= 0) {
+      // The gap is measured from the two-column rows - the typical one, so
+      // that one odd row does not move it. A page whose top half is a full-
+      // width summary has no page-wide gutter, and then any middle gap counts.
+      var gapL = [], gapR = [];
+      kinds.forEach(function (k, i) {
+        if (k !== 'split') return;
+        var g = rowGap(rows[i], pageWidth, bodyH, whole);
+        if (g) { gapL.push(g.l); gapR.push(g.r); }
+      });
+      var gl = median(gapL), gr = median(gapR), reach = bodyH * 0.5;
+      // Two columns of text, not a few figure labels with space between them:
+      // a run of rows that agree on where the gap is.
+      var agree = 0;
+      for (var gi = 0; gi < gapL.length; gi++) {
+        if (Math.abs(gapL[gi] - gl) <= bodyH && Math.abs(gapR[gi] - gr) <= bodyH) agree++;
+      }
+      if (agree >= 6 && agree >= gapL.length * 0.6) {
+        var join = rowJoin(pageWidth, bodyH);
+        var crosses = function (i) {
+          return spansOf(rows[i], join).some(function (sp) {
+            return sp.l < gl - reach && sp.r > gr + reach;
+          });
+        };
+        var rowH = function (i) {
+          return rows[i].boxes.reduce(function (m, b) { return Math.max(m, b.h || 0); }, 0) || bodyH;
+        };
+        var walk = function (from, to, step, side) {
+          for (var i = from; i !== to; i += step) {
+            if (kinds[i] !== 'neutral') return;
+            if (crosses(i)) {
+              // The last line of a block of the body that runs across the
+              // page - a footnote, a caption - sits at that block's own line
+              // spacing. A running head or a footer stands apart.
+              var j = i + step;
+              if (j >= 0 && j < rows.length && (kinds[j] !== 'neutral' || !crosses(j)) &&
+                  Math.abs(rows[i].y - rows[j].y) <= Math.max(rowH(i), rowH(j)) * 1.8) return;
+              edgeOf[i] = side;
+              continue;
+            }
+            var t = rows[i].boxes.map(function (b) { return b.str; }).join(' ');
+            if (t.trim() && !PAGE_NUMBER.test(t)) return;
+          }
+        };
+        walk(rows.length - 1, lastSplit, -1, 'foot');
+        walk(0, firstSplit, 1, 'head');
+      }
+    }
+    rows.forEach(function (row, i) {
+      if (edgeOf[i]) row.boxes.forEach(function (b) { b.edge = edgeOf[i]; });
+    });
+    var edgeKey = function (b) { return b.edge === 'head' ? HEAD_KEY : FOOT_KEY; };
+    var single = function (b) {
+      if (b.edge) return edgeKey(b);
+      return b.aside ? asideKey(b) : columnOf(b, whole);
+    };
+
+    // With an aside on the page, a full-width band ends where the aside does,
+    // at the first paragraph gap below it - so that the aside, read after its
+    // band, comes straight after the abstract it stands beside, and not after
+    // the heading and first lines of the body that open beneath it.
+    var asideLow = asides.length ? Math.min.apply(null, asides.map(function (a) { return a.bottomY; })) : null;
+
+    var bands = [], cur = null, prev = null;
+    var tallest = function (row) { return row.boxes.reduce(function (m, b) { return Math.max(m, b.h || 0); }, 0) || bodyH; };
+    rows.forEach(function (row, ri) {
+      if (edgeOf[ri]) return;
+      var kind = kinds[ri];
+      // A paragraph gap by the rows' own type: the page's typical run can be
+      // small print, and then an abstract's ordinary leading looks like one.
+      var cut = asideLow !== null && cur && cur.kind === 'wide' && kind === 'neutral' &&
+        row.y < asideLow - 0.5 && prev !== null &&
+        prev.y - row.y > Math.max(tallest(prev), tallest(row)) * 1.8;
+      prev = row;
+      if (cut) { cur = { kind: null, rows: [row] }; bands.push(cur); return; }
       if (!cur) { cur = { kind: kind === 'neutral' ? null : kind, rows: [row] }; bands.push(cur); return; }
       if (kind === 'neutral' || kind === cur.kind || cur.kind === null) {
         if (cur.kind === null && kind !== 'neutral') cur.kind = kind;
@@ -355,8 +631,13 @@
       bands.push(cur);
     });
 
+    bands.forEach(function (band) { bandBottoms.push(band.rows[band.rows.length - 1].y); });
+
     // No full-width row anywhere: an ordinary page, and one gutter is right.
-    if (!bands.some(function (b) { return b.kind === 'wide'; })) return single;
+    if (!bands.some(function (b) { return b.kind === 'wide'; })) {
+      bandBottoms = [];
+      return single;
+    }
 
     var gutterOf = [];
     bands.forEach(function (band, bi) {
@@ -367,10 +648,27 @@
       // be sure, and then the page's own gutter is the best guess - it is the
       // same body text, only interrupted.
       var g = detectColumns(inBand, pageWidth, { minBoxes: 6 });
+      // Too few runs to scan at all - two labels side by side in a figure,
+      // between a running head and the caption - but its rows are split rows,
+      // each with its gap: where they all agree, that is the gutter. Only
+      // then: a band with runs enough that the scan found no gutter has none
+      // to be found this way either.
+      if (g === null && band.kind === 'split' && inBand.length < 6) {
+        var gs = [];
+        band.rows.forEach(function (r) {
+          var gg = rowGap(r, pageWidth, bodyH);
+          if (gg) gs.push(gg);
+        });
+        var lo = Math.max.apply(null, gs.map(function (x) { return x.l; }));
+        var hi = Math.min.apply(null, gs.map(function (x) { return x.r; }));
+        if (gs.length >= 2 && hi > lo) g = (lo + hi) / 2;
+      }
       gutterOf[bi] = g !== null ? g : whole;
     });
 
     return function (b) {
+      if (b.edge) return edgeKey(b);
+      if (b.aside) return asideKey(b);
       var bi = b.band || 0;
       return bi * 2 + columnOf(b, gutterOf[bi]);
     };
@@ -381,6 +679,8 @@
    * @param {number|null|function} gutter the gutter's x, null for one column,
    *   or a function giving each box its column key (see assignColumns)
    */
+  var NOT_A_MARK = /[0-9=+\-\u2212\u00D7\u00F7\u00B1<>()\[\]{}\/\\|~^.,;:!?'"%$#&@*_\u2018\u2019\u201C\u201D\u2032\u2033\u2190-\u21FF\u2200-\u22FF]/;
+
   function toLines(boxes, gutter) {
     var heights = boxes.map(function (b) { return b.h; });
     var lineTol = Math.max(2, median(heights) * 0.55);
@@ -422,10 +722,39 @@
     function markerNormalised(items) {
       var first = items[0];
       if (items.length < 2 || !first.font) return items;
-      if (String(first.str).trim().length !== 1) return items;
-      if (!items[1].font || items[1].font === first.font) return items;
+      var ch = String(first.str).trim();
+      if (ch.length !== 1) return items;
+      // Only from a font that sets nothing else: the Cell Press dingbat font
+      // has the one glyph "d", always first on its line. A glyph from any
+      // other font is a word, an option letter, a variable or an operator -
+      // "A  The mitochondrion", "tau  membrane time constant", "x  -1.5", the
+      // ")" closing a line of code - and is to be read, however wide the space
+      // after it.
+      if (!markerFonts[first.font] || !markerFonts[first.font][ch]) return items;
+      // Against the next run with something VISIBLE in it. Cell Press sets the
+      // bullet as "d" and then a space, both in the dingbat font, so the run
+      // right after the bullet is in the bullet's own font - comparing with
+      // that one never saw a change and left the "d" to be read out.
+      var next = null;
+      for (var n = 1; n < items.length; n++) {
+        if (String(items[n].str).trim()) { next = items[n]; break; }
+      }
+      if (!next || !next.font || next.font === first.font) return items;
+      // And it stands apart from its text, by a space at least: the bold
+      // panel label of "a, Mean response" runs straight into its comma. A
+      // number is a section or list number, which has to be kept.
+      if (/^\d$/.test(String(first.str).trim())) return items;
+      var h = Math.max(first.h || 0, next.h || 0) || 8;
+      if (next.x - (first.x + first.w) < h * 0.3) return items;
       var out = items.slice();
-      out[0] = { str: '\u2022', x: first.x, y: first.y, w: first.w, h: first.h, font: first.font };
+      // A copy of the run - its page-view span included, so that the span
+      // still moves into its paragraph - with the bullet for its text.
+      var mark = {};
+      for (var key in first) {
+        if (Object.prototype.hasOwnProperty.call(first, key)) mark[key] = first[key];
+      }
+      mark.str = '\u2022';
+      out[0] = mark;
       return out;
     }
 
@@ -451,27 +780,90 @@
         textLeft: textLeft,
         right: items.reduce(function (m, b) { return Math.max(m, b.x + b.w); }, 0),
         h: median(items.map(function (b) { return b.h; })),
+        textH: textHeight(items),
         text: joinItems(items)
       };
     }
 
-    var out = [];
+    var runs = [];
     lines.forEach(function (ln) {
       ln.items.sort(function (a, b) { return a.x - b.x; });
       var run = [ln.items[0]];
       for (var k = 1; k < ln.items.length; k++) {
         var last = run[run.length - 1];
         if (ln.items[k].x - (last.x + last.w) > farApart) {
-          out.push(finishLine(ln, run));
+          runs.push({ ln: ln, items: run });
           run = [];
         }
         run.push(ln.items[k]);
       }
-      out.push(finishLine(ln, run));
+      runs.push({ ln: ln, items: run });
     });
+
+    // Fonts that set nothing on this page but one glyph at the start of a
+    // line: a bullet font. See markerNormalised.
+    var fontUse = Object.create(null);
+    runs.forEach(function (r) {
+      var firstSeen = false;
+      r.items.forEach(function (it) {
+        var t = String(it.str).trim();
+        if (!t || !it.font) return;
+        var u = fontUse[it.font] || (fontUse[it.font] = { chars: Object.create(null), other: false });
+        if (!firstSeen && t.length === 1) u.chars[t] = (u.chars[t] || 0) + 1;
+        else u.other = true;
+        firstSeen = true;
+      });
+    });
+    var markerFonts = Object.create(null);
+    Object.keys(fontUse).forEach(function (f) {
+      var u = fontUse[f];
+      if (u.other) return;
+      // Option letters and panel labels run A, B, C - a dingbat font's glyphs
+      // ("d" a filled square, "B" a hollow one in Cell Press) do not.
+      if ((u.chars.A && u.chars.B) || (u.chars.a && u.chars.b)) return;
+      // Each mark more than once: a list has items. A page whose only
+      // math-font glyphs are the "W" that starts one line, or the symbols of a
+      // notation list, has no list.
+      // And never an operator, a bracket, punctuation or a digit: two
+      // multiplication signs starting the rows of a figure's equation are
+      // the only glyphs of their font on that page too.
+      var marks = Object.create(null), any = false;
+      Object.keys(u.chars).forEach(function (c) {
+        if (u.chars[c] >= 2 && !NOT_A_MARK.test(c)) { marks[c] = true; any = true; }
+      });
+      if (any) markerFonts[f] = marks;
+    });
+
+    var out = runs.map(function (r) { return finishLine(r.ln, r.items); });
 
     return out.filter(function (ln) { return ln.text.trim().length > 0; });
   }
+
+  /*
+   * The size most of a line's words are set in: the height of its runs
+   * weighted by how many letters each holds. A drop cap, a line number, a
+   * section number or a superscript is one run of a line's few - and moved
+   * the plain median far enough to make the first line of an abstract, or
+   * every line of a preprint, look like a heading, and a preprint's "6
+   * LIMITATIONS" look like body text.
+   */
+  var LETTER = /[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/g;
+  function textHeight(items) {
+    var hs = [], cap = null;
+    items.forEach(function (b) {
+      var s = String(b.str).trim();
+      var letters = s.match(LETTER) || [];
+      if (!letters.length) return;
+      var h = b.h;
+      // Small capitals take the size of the capital before them: "L" at
+      // 12pt and "IMITATIONS" at 9.6 is a heading set at 12.
+      if (cap && letters.join('') === letters.join('').toUpperCase() && letters.length > 1 && cap > h) h = cap;
+      cap = letters.length === 1 && /[A-Z]/.test(letters[0]) ? b.h : null;
+      for (var k = 0; k < Math.min(letters.length, 200); k++) hs.push(h);
+    });
+    return hs.length ? median(hs) : median(items.map(function (b) { return b.h; }));
+  }
+  function sizeOf(l) { return (l && (l.textH || l.h)) || 0; }
 
   /** Concatenate runs, inserting a space only where the glyphs are apart. */
   function joinItems(items) {
@@ -494,8 +886,23 @@
    * Running heads and page numbers
    * ------------------------------------------------------------------ */
 
+  /*
+   * Facing pages put the page number at the OUTER edge, so the same footer is
+   * "2436 Neuron 112, 2435-2451, July 17, 2024" on one page and "Neuron 112,
+   * 2435-2451, July 17, 2024 2437" on the next. Taken whole, each version is on
+   * only half the pages and neither looked repeated, so every footer of a Cell
+   * Press paper was read out. A page number (or an "e3"-style supplement page
+   * number, or the "ll" Cell Press mark beside it) at either end is not what
+   * makes a footer the same footer, so it is left out of the comparison.
+   */
+  var EDGE_TOKEN = /^(?:[a-z]?#[a-z]?(?:[\-\u2013\u2014][a-z]?#[a-z]?)?|[|\u00B7\u2022.\-\u2013\u2014]+|ll)$/;
+
   function normaliseForRepeat(s) {
-    return s.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().toLowerCase();
+    var t = s.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().toLowerCase();
+    var words = t.split(' ');
+    while (words.length > 2 && EDGE_TOKEN.test(words[0])) words.shift();
+    while (words.length > 2 && EDGE_TOKEN.test(words[words.length - 1])) words.pop();
+    return words.join(' ');
   }
 
   /**
@@ -515,48 +922,139 @@
    * a position check a figure caption that happens to sit near the top on
    * several pages would be deleted as furniture.
    */
+  /*
+   * How far in from the top and bottom a running head can be. A tenth missed
+   * Cell Press's "Article", 79pt down a 783pt page: 89.9% of the way up. Only
+   * lines in this band are looked at, and what is looked at still has to
+   * repeat, so body text here is safe.
+   */
+  var EDGE_BAND = 0.12;
+
+  // A bare number is taken for a page number without having to repeat, so it
+  // keeps the narrower band: four lines up a Nature page, "1989." can be the
+  // end of a sentence.
+  var NUMBER_BAND = 0.10;
+  function atNumberEdge(y, h) {
+    return !h || y >= h * (1 - NUMBER_BAND) || y <= h * NUMBER_BAND;
+  }
+
   function edgeLines(page) {
     var h = page.height || 0;
     if (!h) return page.lines.slice(0, 2).concat(page.lines.slice(-2));
-    var topBand = h * 0.90, bottomBand = h * 0.10;
+    var topBand = h * (1 - EDGE_BAND), bottomBand = h * EDGE_BAND;
     return page.lines.filter(function (ln) {
       return ln.y >= topBand || ln.y <= bottomBand;
     });
   }
 
-  function findRunningHeads(pages) {
-    var counts = {};
-    var n = pages.length;
-    if (n < 3) return {};
+  var ARTICLE_TYPE = /^(article|articles|resource|report|reports|review|reviews|perspective|perspectives|letter|letters|research|analysis|brief|communication|commentary|editorial|opinion|feature|essay|primer|preview|previews|insight|insights|correspondence|neuron|neuroscience)$/;
 
-    pages.forEach(function (page) {
-      var seen = {};
+  // No other line just above or below it, overlapping it across the page.
+  function standsAlone(lines, ln) {
+    var h = ln.h || 8;
+    return !lines.some(function (o) {
+      if (o === ln) return false;
+      var near = Math.abs(o.y - ln.y) < Math.max(h, o.h || 0) * 1.6;
+      var over = Math.min(o.right, ln.right) - Math.max(o.left, ln.left) > 2;
+      return near && over;
+    });
+  }
+
+  function findRunningHeads(pages) {
+    // No prototype: a line reading "constructor" is not already a head.
+    var counts = Object.create(null);
+    var n = pages.length;
+    if (n < 3) return Object.create(null);
+
+    // Slides: a title word repeated from slide to slide is a title.
+    var landscape = pages.filter(function (p) { return p.width && p.height && p.width > p.height; }).length > n / 2;
+
+    pages.forEach(function (page, idx) {
+      var seen = Object.create(null);
+      var num = page.page || idx + 1;
+      var h = page.height || 800;
       edgeLines(page).forEach(function (ln) {
         if (!isFurniture(ln.text)) return;
         var key = normaliseForRepeat(ln.text);
         if (!key || seen[key]) return;
         seen[key] = 1;
-        if (!counts[key]) counts[key] = { n: 0, ys: [] };
-        counts[key].n++;
-        counts[key].ys.push(ln.y);
+        if (!counts[key]) counts[key] = [];
+        counts[key].push({ at: ln.y / h, page: num, text: ln.text, alone: standsAlone(page.lines, ln) });
       });
     });
 
     var threshold = Math.max(3, Math.ceil(n * 0.4));
-    var pageHeight = pages[0].height || 800;
-    var heads = {};
+    var heads = Object.create(null);
     Object.keys(counts).forEach(function (k) {
-      var c = counts[k];
-      if (c.n < threshold) return;
-      var min = Math.min.apply(null, c.ys), max = Math.max.apply(null, c.ys);
-      // Same text, same place, on most pages.
-      if (max - min > pageHeight * 0.06) return;
-      heads[k] = true;
+      // Same text in the same place. Counted at its usual height: the Cell
+      // Press mark is at the top of every page but the first, where it is at
+      // the foot - and judged by its whole spread it was in no one place.
+      var mid = median(counts[k].map(function (o) { return o.at; }));
+      var at = counts[k].filter(function (o) { return Math.abs(o.at - mid) <= 0.03; });
+      // One word ("Article") only as a running head proper: on five pages or
+      // more, and not in a slide deck - not "Results" over three slides. And
+      // only a word that names the kind of article, or one standing alone: in
+      // a document of figures "Left" heads every page, over "Hemisphere".
+      var oneWord = k.indexOf(' ') < 0 && k !== 'll';
+      if (oneWord && landscape) return;
+      if (oneWord && !ARTICLE_TYPE.test(k)) at = at.filter(function (o) { return o.alone; });
+      var nAt = at.length;
+      if (!nAt) return;
+      var first = Math.min.apply(null, at.map(function (o) { return o.page; }));
+      var last = Math.max.apply(null, at.map(function (o) { return o.page; }));
+      // On most pages - or on nearly every page of one stretch of them. The
+      // supplement at the back of a paper has a footer of its own ("e3 Neuron
+      // 112, 2435-2451.e1-e7"), on all seven of its pages but on too few of
+      // the whole paper's to pass the first test. Only for a footer of that
+      // kind - numbered, set out with separators, at the foot of the page - so
+      // that a slide title over four overlays, or "Supplementary Figure 3" at
+      // the head of each of the figures, is still read.
+      var structured = k.indexOf('#') >= 0 && /[,|\u00B7\u2022\u2014\u2013]/.test(at[0].text);
+      var stretch = structured && mid <= EDGE_BAND && nAt >= 4 && nAt >= (last - first + 1) * 0.8;
+      if (nAt < (oneWord ? Math.max(5, threshold) : threshold) && !stretch) return;
+      heads[k] = { at: mid };
     });
     return heads;
   }
 
-  var PAGE_NUMBER = /^[\s|.\-]*(?:page\s*)?\d{1,4}(?:\s*(?:of|\/)\s*\d{1,4})?[\s|.\-]*$/i;
+  /*
+   * Whether a line at the top or bottom of a page is one of the running heads.
+   *
+   * Only at the head's own height: a thesis's running head repeats the
+   * chapter title, which on the chapter's opening page is a line of the body
+   * just inside the edge band. (The Cell Press mark is the exception; it moves
+   * to the foot on the first page.)
+   *
+   * The first page of an article often runs its footer on with more - "Neuron
+   * 112, 2435-2451, July 17, 2024 (c) 2024 Elsevier Inc. All rights reserved."
+   * - and is the only page with that line, so it never repeats. A line that
+   * STARTS with a running head is that head. Only for a head with a number in
+   * it: "Nature Neuroscience" alone could begin a sentence at the foot of a
+   * page, a volume and page range cannot.
+   *
+   * @param {number} [y] the line's height on the page, and
+   * @param {number} [pageHeight] the page's, to compare where they sit
+   */
+  function isRunningHead(heads, text, y, pageHeight) {
+    if (!heads) return false;
+    var key = normaliseForRepeat(text);
+    var own = Object.prototype.hasOwnProperty;
+    function near(k) {
+      var at = heads[k] && heads[k].at;
+      if (typeof at !== 'number' || typeof y !== 'number' || !pageHeight) return true;
+      if (/^ll(?: ll)*$/.test(k)) return true;
+      return Math.abs(y / pageHeight - at) <= 0.03;
+    }
+    if (own.call(heads, key)) return near(key);
+    for (var k in heads) {
+      if (!own.call(heads, k)) continue;
+      if (k.length < 16 || k.indexOf('#') < 0 || k.split(' ').length < 3) continue;
+      if (key.length > k.length && key.indexOf(k) === 0 && /[\s,;:.|]/.test(key.charAt(k.length)) && near(k)) return true;
+    }
+    return false;
+  }
+
+  var PAGE_NUMBER = /^[\s|.\-\u2013\u2014]*(?:page\s*)?\d{1,4}(?:\s*(?:of|\/)\s*\d{1,4})?[\s|.\-\u2013\u2014]*$/i;
 
   /**
    * Guard against deleting real prose.
@@ -582,10 +1080,22 @@
 
   function isFurniture(text) {
     var t = String(text).trim();
-    if (!t || t.length > 70) return false;              // heads are short
-    if (/^[\p{Ll}]/u.test(t)) return false;             // a sentence continuing
+    // Heads are short - or, set right across the page, carry their numbers:
+    // "Local-Global Parcellation of the Human Cerebral Cortex Schaefer et al. |
+    // 3111", "Ann. N.Y. Acad. Sci. 1396 (2017) 166-182 (c) 2017 New York
+    // Academy of Sciences." Prose that repeats at the same place on page after
+    // page, numbers and all, is not a thing that happens.
+    var numbered = (t.match(/\d+/g) || []).length >= 2 ||
+      (/\d/.test(t) && /[|\u00B7\u2022\u00A9]|\b(doi|vol)\b/i.test(t));
+    if (!t || t.length > 160 || (t.length > 70 && !numbered)) return false;
+    if (/^ll(?:\s+ll)*$/.test(t)) return true;          // the Cell Press mark
+    if (/^(https?:\/\/|www\.|doi:\s*)\S+$/i.test(t)) return true;   // the article's DOI
+    // A sentence continuing - but "e3", a supplement's page number, is not,
+    // nor is "nature neuroscience VOLUME 19 | NUMBER 3 | MARCH 2016".
+    var setOut = numbered && /[|\u00B7\u2022]/.test(t);
+    if (!setOut && /^[\p{Ll}]/u.test(t.replace(/^[a-z]\d+[a-z]?\s+/, ''))) return false;
     if (PAGE_NUMBER.test(t)) return true;               // a bare page number is
-    if (/[.!?]["'\u2019\u201D)\]]?$/.test(t) && t.split(/\s+/).length > 6) return false;
+    if (!numbered && /[.!?]["'\u2019\u201D)\]]?$/.test(t) && t.split(/\s+/).length > 6) return false;
 
     // normaliseForRepeat() turns every digit run into a placeholder, so
     // "Problem 1" ... "Problem 8" all collapse to one key and look repeated.
@@ -599,6 +1109,10 @@
 
     var residue = t.replace(/\d+/g, ' ').replace(/\s+/g, ' ').trim();
     var tokens = residue ? residue.split(/\s+/).filter(Boolean) : [];
+    // One word with no number in it collapses into nothing else: "Article" at
+    // the head of every page of a Cell Press paper is the same line each time,
+    // and was read out in the middle of whatever sentence crossed the page.
+    if (tokens.length === 1 && !/\d/.test(t) && residue.length >= 3) return true;
     return tokens.length >= 2;
   }
 
@@ -659,7 +1173,8 @@
     if (t.length > 90 || t.length < 3) return false;
 
     var ratio = ln.h / bodyHeight;
-    if (ratio > DISPLAY_TYPE) return true;          // a title, unambiguously
+    // A title, unambiguously - if its words are big, and not just a drop cap.
+    if (ratio > DISPLAY_TYPE && sizeOf(ln) / bodyHeight > LARGER_TYPE) return true;
     if (ratio > LARGER_TYPE) {
       var edge = ctx && ctx.rightEdge;
       if (!edge) return true;                       // no measure to judge by
@@ -667,7 +1182,21 @@
       // measure: the paragraph's lines run to the right margin, a heading
       // stops well short of it.
       var fills = function (l) { return l && l.right >= edge - bodyHeight * 4; };
-      if (fills(ln)) return false;
+      // A lead paragraph is several lines at its size. One line clearly
+      // bigger than the lines either side of it, not ending as a sentence
+      // does, is a heading however far across it runs: "(b) Anterior versus
+      // posterior hippocampal function", nearly the column's width, at 14pt
+      // between lines at 9. Clearly: a line number or a superscript changes a
+      // line's height by a point or so, and that is not a heading.
+      // Nor is a line that carries a sentence on, or holds one. And the sizes
+      // compared are those of the lines' words (see textHeight): a line
+      // number set large, or a drop cap, makes a line look a point bigger.
+      var smaller = function (l) { return l && sizeOf(l) * 1.15 <= sizeOf(ln); };
+      if (fills(ln)) {
+        return !!ctx.prev && !!ctx.next && smaller(ctx.prev) && smaller(ctx.next) &&
+          !TERMINAL_AT_END.test(t) && !hasInnerTerminator(t) &&
+          TERMINAL_AT_END.test(String(ctx.prev.text).trim());
+      }
       // A short line carrying on from a filled line of the SAME size is that
       // paragraph's last line - "local spatial constraints." - not a heading.
       var prev = ctx.prev;
@@ -727,54 +1256,95 @@
    * Turn a page's lines into blocks, then merge blocks across page breaks when
    * a paragraph obviously continues.
    */
-  function linesToBlocks(lines, bodyHeight, joinHyphens) {
-    if (!lines.length) return [];
-
+  /*
+   * Where a page's lines break into paragraphs. One function for both the
+   * reading view and the page image, so that the two group a page alike.
+   *
+   * @returns {function(number): {breakHere:boolean, heading:boolean}} for the
+   *   line at each index
+   */
+  function paragraphBreaks(lines, bodyHeight) {
     var gaps = [];
     for (var i = 1; i < lines.length; i++) {
       if (lines[i].col === lines[i - 1].col) gaps.push(lines[i - 1].y - lines[i].y);
     }
     var normalGap = median(gaps.filter(function (g) { return g > 0; })) || bodyHeight * 1.2;
 
+    // The spacing just around a line, in its own column: a page of small
+    // reference text sets the page's typical gap, and against that the body's
+    // ordinary leading looks like a break at every sentence end.
+    var gapAt = function (k) {
+      return k > 0 && k < lines.length && lines[k].col === lines[k - 1].col ? lines[k - 1].y - lines[k].y : null;
+    };
+    // Only where that spacing is steady: a superscript, or a fragment set
+    // apart on a line of its own, throws the gaps about by a point or two,
+    // and a sentence ending beside one is not a paragraph's end.
+    var localGap = function (idx) {
+      var near = [];
+      [idx - 2, idx - 1, idx + 1, idx + 2].forEach(function (k) {
+        var g = gapAt(k);
+        if (g !== null && g > 0 && lines[k].col === lines[idx].col) near.push(g);
+      });
+      if (near.length < 2) return 0;
+      var lo = Math.min.apply(null, near), hi = Math.max.apply(null, near);
+      return hi - lo <= Math.max(0.6, hi * 0.06) ? hi : 0;
+    };
+
     var edges = columnEdges(lines);
     var leftEdge = lines.reduce(function (m, ln) { return Math.min(m, ln.left); }, Infinity);
     var indentTol = bodyHeight * 0.8;
+    var ctxOf = function (idx) {
+      var l = lines[idx];
+      return { rightEdge: edges[l.col || 0] || 0, prev: lines[idx - 1], next: lines[idx + 1] };
+    };
 
-    var blocks = [], cur = null;
-
-    lines.forEach(function (ln, idx) {
-      var prev = lines[idx - 1];
-      var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
-      var heading = isHeadingLine(ln, bodyHeight, ctx);
-      var prevHeading = prev && isHeadingLine(prev, bodyHeight,
-        { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] });
+    return function (idx) {
+      var ln = lines[idx], prev = lines[idx - 1];
+      var heading = isHeadingLine(ln, bodyHeight, ctxOf(idx));
+      var prevHeading = !!prev && isHeadingLine(prev, bodyHeight, ctxOf(idx - 1));
       // One heading wrapped over several lines stays one block.
       var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
 
-      var breakHere = !cur || LIST_MARKER.test(ln.text) ||
+      var breakHere = !prev || LIST_MARKER.test(ln.text) ||
         (!sameHeading && (heading || prevHeading));
       // Not for a wrapped heading: the tests below are about paragraph shape,
       // and display type is leaded far wider than a paragraph - the gap test
       // would put the break back in that sameHeading just took out.
-      if (!breakHere && prev && !sameHeading) {
+      if (!breakHere && !sameHeading) {
         if (prev.col !== ln.col) breakHere = true;
         else {
           var gap = prev.y - ln.y;
+          var startsAnew = endsSentence(prev.text) && /^[A-Z\u2022\u00B7(\[]/.test(ln.text);
           if (gap > normalGap * 1.45) breakHere = true;
+          // A little more space than the lines on either side of it, between
+          // a sentence's end and a capital: the entries of a reference list,
+          // the short paragraphs of back matter, set apart by a point or two.
+          else if (startsAnew && localGap(idx) && gap > localGap(idx) * 1.12) breakHere = true;
           else if (ln.left - leftEdge > indentTol &&
                    ln.left - (prev.textLeft || prev.left) > indentTol) breakHere = true;
           // A short last line followed by a capital is a paragraph end.
-          else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
-                   endsSentence(prev.text) &&
-                   /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;
+          else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 && startsAnew) breakHere = true;
         }
       }
+      return { breakHere: breakHere, heading: heading };
+    };
+  }
 
-      if (breakHere) {
+  function linesToBlocks(lines, bodyHeight, joinHyphens) {
+    if (!lines.length) return [];
+    var breaks = paragraphBreaks(lines, bodyHeight);
+    var blocks = [], cur = null;
+
+    lines.forEach(function (ln, idx) {
+      var prev = lines[idx - 1];
+      var br = breaks(idx);
+      if (br.breakHere || !cur) {
         cur = {
-          type: heading ? 'h' : 'p',
+          type: br.heading ? 'h' : 'p',
           lines: [ln.text],
-          brokeColumn: !!(prev && prev.col !== ln.col)
+          brokeColumn: !!(prev && prev.col !== ln.col),
+          aside: ((ln.col || 0) % 1) !== 0,
+          edge: isEdgeKey(ln.col)
         };
         blocks.push(cur);
       } else {
@@ -787,6 +1357,8 @@
       return {
         type: b.type,
         text: lns.join(' ').replace(/\s+/g, ' ').trim(),
+        aside: !!b.aside,
+        edge: !!b.edge,
         brokeColumn: b.brokeColumn
       };
     }).filter(function (b) { return b.text.length > 0; });
@@ -802,8 +1374,16 @@
   function mergeContinuations(blocks) {
     var out = [];
     blocks.forEach(function (b) {
-      var prev = out[out.length - 1];
-      var continues = prev &&
+      // The paragraph this one might continue is the last one that is not an
+      // aside: a notice read between two halves of a paragraph must not stop
+      // them being joined, and it then follows the joined paragraph instead.
+      // A running head or a footer between them is passed over the same way,
+      // and is never joined to anything: "...in terms of shared or" is not
+      // continued by "nature neuroscience VOLUME 19".
+      var k = out.length - 1;
+      while (k >= 0 && (out[k].aside || out[k].edge) && !b.aside && !b.edge) k--;
+      var prev = out[k];
+      var continues = prev && !b.aside && !b.edge && !prev.edge &&
         b.type === 'p' && prev.type === 'p' &&
         (b.brokeColumn || b.firstOnPage) &&
         !endsSentence(prev.text) &&
@@ -913,7 +1493,7 @@
       var removedLines = 0;
       var kept = perPage.map(function (p) {
         var h = p.height || 0;
-        var topBand = h * 0.90, bottomBand = h * 0.10;
+        var topBand = h * (1 - EDGE_BAND), bottomBand = h * EDGE_BAND;
         var lines = p.lines.filter(function (ln) {
           // Index-based edges are wrong once lines are sorted by column: entry
           // 0 is the top of the LEFT column and the last entry is the foot of
@@ -922,8 +1502,8 @@
           if (MARGIN_BADGE.test(ln.text.trim())) { removedLines++; return false; }
           var atEdge = h ? (ln.y >= topBand || ln.y <= bottomBand) : true;
           if (!atEdge) return true;
-          if (PAGE_NUMBER.test(ln.text)) { removedLines++; return false; }
-          if (heads[normaliseForRepeat(ln.text)]) { removedLines++; return false; }
+          if (atNumberEdge(ln.y, h) && PAGE_NUMBER.test(ln.text)) { removedLines++; return false; }
+          if (isRunningHead(heads, ln.text, ln.y, h)) { removedLines++; return false; }
           return true;
         });
         return { page: p.page, lines: lines, columns: p.columns };
@@ -932,9 +1512,13 @@
       var blocks = [];
       kept.forEach(function (p) {
         var pageBlocks = linesToBlocks(p.lines, bodyHeight, opts.joinHyphens !== false);
-        pageBlocks.forEach(function (b, i) {
+        // The first block of the page's body: a running head kept above it
+        // must not stop a sentence from the page before carrying on into it.
+        var bodySeen = false;
+        pageBlocks.forEach(function (b) {
           b.page = p.page;
-          b.firstOnPage = i === 0;
+          b.firstOnPage = !bodySeen && !b.edge && !b.aside;
+          if (!b.edge && !b.aside) bodySeen = true;
           blocks.push(b);
         });
       });
@@ -1150,13 +1734,13 @@
     // Drop the furniture, so the running head is not read out mid-page the way
     // it used to be in this view.
     if (opts.stripRunningHeads !== false) {
-      var top = viewport.height * 0.90, bottom = viewport.height * 0.10;
+      var top = viewport.height * (1 - EDGE_BAND), bottom = viewport.height * EDGE_BAND;
       lines = lines.filter(function (ln) {
         if (MARGIN_BADGE.test(ln.text.trim())) { hide(ln); return false; }
         var atEdge = ln.y >= top || ln.y <= bottom;
         if (!atEdge) return true;
-        if (PAGE_NUMBER.test(ln.text)) { hide(ln); return false; }
-        if (opts.heads && opts.heads[normaliseForRepeat(ln.text)]) { hide(ln); return false; }
+        if (atNumberEdge(ln.y, viewport.height) && PAGE_NUMBER.test(ln.text)) { hide(ln); return false; }
+        if (isRunningHead(opts.heads, ln.text, ln.y, viewport.height)) { hide(ln); return false; }
         return true;
       });
     }
@@ -1192,43 +1776,12 @@
   /** The same paragraph-break rules as linesToBlocks, returning line groups. */
   function regroupLines(lines, bodyHeight) {
     if (!lines.length) return [];
-    var gaps = [];
-    for (var i = 1; i < lines.length; i++) {
-      if (lines[i].col === lines[i - 1].col) gaps.push(lines[i - 1].y - lines[i].y);
-    }
-    var normalGap = median(gaps.filter(function (g) { return g > 0; })) || bodyHeight * 1.2;
-    var edges = columnEdges(lines);
-    var leftEdge = lines.reduce(function (m, ln) { return Math.min(m, ln.left); }, Infinity);
-    var indentTol = bodyHeight * 0.8;
-
+    // The same breaks as the reading view, so the page image groups a page -
+    // a wrapped title included - the way the reading view does.
+    var breaks = paragraphBreaks(lines, bodyHeight);
     var groups = [], cur = null;
     lines.forEach(function (ln, idx) {
-      var prev = lines[idx - 1];
-      var ctx = { rightEdge: edges[ln.col || 0] || 0, prev: prev };
-      var heading = isHeadingLine(ln, bodyHeight, ctx);
-      var prevHeading = prev && isHeadingLine(prev, bodyHeight,
-        { rightEdge: edges[prev.col || 0] || 0, prev: lines[idx - 2] });
-      // One heading wrapped over several lines stays one group here too, so
-      // the page image groups the title the same way the reading view does.
-      var sameHeading = heading && prevHeading && sameHeadingRun(prev, ln);
-      var breakHere = !cur || LIST_MARKER.test(ln.text) ||
-        (!sameHeading && (heading || prevHeading));
-      // Not for a wrapped heading: the tests below are about paragraph shape,
-      // and display type is leaded far wider than a paragraph - the gap test
-      // would put the break back in that sameHeading just took out.
-      if (!breakHere && prev && !sameHeading) {
-        if (prev.col !== ln.col) breakHere = true;
-        else {
-          var gap = prev.y - ln.y;
-          if (gap > normalGap * 1.45) breakHere = true;
-          else if (ln.left - leftEdge > indentTol &&
-                   ln.left - (prev.textLeft || prev.left) > indentTol) breakHere = true;
-          else if (prev.right < (edges[prev.col || 0] || 0) - bodyHeight * 3 &&
-                   endsSentence(prev.text) &&
-                   /^[A-Z\u2022\u00B7(\[]/.test(ln.text)) breakHere = true;
-        }
-      }
-      if (breakHere) { cur = [ln]; groups.push(cur); }
+      if (!cur || breaks(idx).breakHere) { cur = [ln]; groups.push(cur); }
       else cur.push(ln);
     });
     return groups;
@@ -1303,10 +1856,12 @@
       detectColumns: detectColumns,
       assignColumns: assignColumns,
       rowKind: rowKind,
+      findAsides: findAsides,
       rowsOf: rowsOf,
       toLines: toLines,
       linesToBlocks: linesToBlocks,
       findRunningHeads: findRunningHeads,
+      isRunningHead: isRunningHead,
       normaliseForRepeat: normaliseForRepeat,
       isFurniture: isFurniture,
       hasInnerTerminator: hasInnerTerminator,
@@ -1314,7 +1869,9 @@
       alignSpans: alignSpans,
       endsSentence: endsSentence,
       mergeContinuations: mergeContinuations,
+      paragraphBreaks: paragraphBreaks,
       edgeLines: edgeLines,
+      atNumberEdge: atNumberEdge,
       isHeadingLine: isHeadingLine,
       joinItems: joinItems,
       median: median,
